@@ -85,14 +85,24 @@ Below zero, **the world is drawn in negative**: black ink on white. Negative num
 - **One equation door** (`3x + 1 = 3`), and `7x = 22` before the boss.
 - **Boss: π, "the number that never ends."** It never stops moving. Its digits fly at x in order (3, 1, 4, 1, 5, 9…): a 9 is a slow heavy ring, a 1 a fast needle, a 0 a breath of silence. Strike a digit and it flies back, shattering whatever piece it meets or staggering π. Around π circle the pieces of an old measurement of the circle: 3 + 1/8 (Babylon), 3 + 1/7 (Archimedes), 3 + 1/10 + 1/25 (3.14). Break all the pieces, by exact strikes or struck-back digits, and it cracks. Each phase changes the arena: a figure of eight in the air; a wheel rolling round floor, wall, ceiling and wall; then a closing circle outside which there is nothing. At the end its circle unrolls into a line π long, which x takes up: **x = π**, and π = π.
 
-### Chapter III — Functions *(high school)*
+### Chapter III — Functions *(high school)* — **playable**
 
-Polynomials, graphs and transformations, trigonometry, exponentials and logarithms, sequences and series, complex numbers.
+Linear functions, the sine, the parabola, the floor function, exponential growth and logarithms.
 
-- **Function slots:** graphs as attacks and as terrain. `sin` weaves, `tan` throws asymptote spikes, `⌊x⌋` builds stairs, `|x|` bounces. Your x sets the amplitude, frequency or coefficient.
-- **Enemy telegraphs are graphs.** A boss "plots" its attack faintly before it fires.
-- **× i** rotates gravity 90°. Because i⁴ = 1, puzzles cycle in fours.
-- **Bosses:** e (grows exponentially, so cut it with ln), i (fights across the complex plane), φ (spawns copies in Fibonacci numbers).
+Drawn as a **blueprint**: cold ink on near-black, with ruled graph-paper lines (bolder every fifth).
+
+- Rooms: *the graph → the wave → the arc → the floor → the wall → doubling → the slow → the root → e*
+- **Functions are weapons.** `F` fires the chosen function, `Q` chooses. A function's shot strikes whatever it meets with x, by the same exact-kill rule. Where it makes sense, x is also the function's parameter, so choosing x chooses a shape:
+  - **ax** — a beam, aimed straight, up or down.
+  - **sin** — a weaving wave of height x; negative x turns it over.
+  - **x²** — a lob whose arc is x tall (negative x throws downward).
+  - **⌊x⌋** — builds ⌊x⌋ one-tile steps (at most 6). A nine-tile wall can only be climbed on them: hold at least 5.
+  - **ln** — carries no x. It counts growth back: e^k becomes the plain number k, and ln 1 = 0 undoes a 1. Anything else "never ends".
+- **Graphs are terrain.** Standing surfaces defined by functions: a line ramp, a moving sine wave over a pit (ride it), a parabolic bowl. You can step onto a graph from the ground.
+- **Telegraphs are graphs.** Plotters show the sine or parabola they will fire along before they fire.
+- **Enemies:** plotters; doublers (1, 2, 4, 8, …, bursting past 128); e-forms (e², e³) that no number can lessen until ln counts them back; a gate of e³.
+- **One equation door:** `x² = 16`, which opens to either root, 4 or −4.
+- **Boss: e, "the number that grows by what it is."** It grows a power every few seconds (e¹, e², … e⁷, then bursts and begins again). Small, it darts and is hard to catch; grown, it is slow and dangerous. Only ln counts it back, to the plain number k, which must then be struck exactly to zero. Each phase it starts from a greater power, and from the second phase it also lobs parabolas. At the end it counts itself down, e³, e², e¹, e⁰ = 1, and x equates: 1 = 1. x receives e.
 
 ### Chapter IV — Calculus
 

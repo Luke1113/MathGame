@@ -6,6 +6,8 @@ export type Ev =
   | { k: 'strike' }
   | { k: 'equate' }
   | { k: 'pause' }
+  | { k: 'fire' }
+  | { k: 'cycle' }
   | { k: 'up' }
   | { k: 'down' }
   | { k: 'left' }
@@ -65,6 +67,8 @@ function classify(e: KeyboardEvent): Ev {
   if (c === 'KeyJ' || c === 'Numpad0') return { k: 'strike' };
   if (c === 'Enter' || c === 'NumpadEnter') return { k: 'equate' };
   if (c === 'Escape') return { k: 'pause' };
+  if (c === 'KeyF') return { k: 'fire' };
+  if (c === 'KeyQ') return { k: 'cycle' };
   if (c in OP_CODES) return { k: 'op', op: OP_CODES[c] };
   // Typed characters next: Shift + 8 has code Digit8 but means ×.
   if (e.key in OP_CHARS) return { k: 'op', op: OP_CHARS[e.key] };

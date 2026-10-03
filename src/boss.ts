@@ -13,6 +13,8 @@ export interface BossHost {
   arenaW: number;
   /** Fire a shot; a digit shot carries its digit, and x can strike it back. */
   shoot(x: number, y: number, vx: number, vy: number, digit?: number): void;
+  /** Fire along a graph toward (tx, ty), after showing it. */
+  plot(x: number, y: number, path: 'sin' | 'para', tx: number, ty: number): void;
   /** Fill x's equate meter. */
   reward(amount: number): void;
   shake(a: number): void;
@@ -52,6 +54,8 @@ export interface Boss {
   equate(v: Q): void;
   /** A shot x struck back; true if the boss caught it. */
   catchShot(x: number, y: number, r: number): boolean;
+  /** An ln shot arrives. Undefined if it missed; otherwise text to float, or null. */
+  ln?(x: number, y: number, r: number): string | null | undefined;
 }
 
 type State =

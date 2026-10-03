@@ -12,7 +12,7 @@ for (const r of ROOMS) {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const c = r.map[y][x];
     if (/[a-z]/.test(c) && !r.legend[c]) fail(`${r.id} (${x},${y}) '${c}' missing from legend`);
-    if (/[A-Z]/.test(c)) {
+    if (/[A-Z0-9]/.test(c)) {
       const side = x === 0 ? 'W' : x === w - 1 ? 'E' : y === 0 ? 'N' : y === h - 1 ? 'S' : '?';
       if (side === '?') fail(`${r.id} exit ${c} at (${x},${y}) is not on the border`);
       const list = exits.get(c) ?? [];
@@ -34,18 +34,29 @@ for (const [letter, list] of exits) {
 // ——— reachability: can every pickup and exit be reached with run, jump and dash?
 // A jump rises about 3.9 tiles, so a ledge 3 rows up is reachable and 4 rows up is not.
 const JUMP_ROWS = 3;
-/** With the upward dash (√2), a jump climbs about 7 tiles. */
+/** With the upward dash (y), a jump climbs about 7 tiles; ⌊x⌋'s six steps and a jump climb 9. */
 const DASH_ROWS = 6;
+const STAIRS_ROWS = 9;
 /** Pixels a body can rise: a jump alone, or a jump with an upward dash at any moment (conservative). */
 const JUMP_RISE = 120;
 const DASH_RISE = 210;
 /** How many columns a jump can carry you, by rows climbed (from a running start). */
 const JUMP_SPAN = [6, 5, 5, 4];
 for (const r of ROOMS) {
-  const climb = r.dash ? DASH_ROWS : JUMP_ROWS;
+  const climb = r.stairs ? STAIRS_ROWS : r.dash ? DASH_ROWS : JUMP_ROWS;
   const w = r.map[0].length;
   const h = r.map.length;
-  const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? '.' : r.map[y][x]);
+  // graphs to stand on count as platforms, at their resting height
+  const grid = r.map.map((row) => [...row]);
+  for (const c of r.curves ?? []) {
+    for (let x = Math.ceil(c.x0); x < Math.floor(c.x1); x++) {
+      const u = x + 0.5;
+      const yy = c.k === 'line' ? c.y0 + ((c.y1 - c.y0) * (u - c.x0)) / (c.x1 - c.x0) : c.k === 'sin' ? c.y : c.vy - c.a * (u - c.vx) ** 2;
+      const row = Math.floor(yy - 0.01);
+      if (row >= 0 && row < h && grid[row][x] === '.') grid[row][x] = '-';
+    }
+  }
+  const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? '.' : grid[y][x]);
   const solid = (x: number, y: number) => at(x, y) === '#';
   const floor = (x: number, y: number) => at(x, y) === '#' || at(x, y) === '-';
   const stand = (x: number, y: number) => x >= 0 && x < w && y >= 0 && y < h && !solid(x, y) && floor(x, y + 1);
@@ -68,9 +79,9 @@ for (const r of ROOMS) {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const c = at(x, y);
-      if (c === '@' || c === '&' || ((x === 0 || x === w - 1) && /[A-Z]/.test(c))) push(stand(x, y) ? [x, y] : fall(x, y));
-      if (y === 0 && /[A-Z]/.test(c)) push(fall(x, 1));
-      if (y === h - 1 && /[A-Z]/.test(c)) for (let up = 1; up <= 5; up++) if (stand(x, h - 1 - up)) push([x, h - 1 - up]);
+      if (c === '@' || c === '&' || ((x === 0 || x === w - 1) && /[A-Z0-9]/.test(c))) push(stand(x, y) ? [x, y] : fall(x, y));
+      if (y === 0 && /[A-Z0-9]/.test(c)) push(fall(x, 1));
+      if (y === h - 1 && /[A-Z0-9]/.test(c)) for (let up = 1; up <= 5; up++) if (stand(x, h - 1 - up)) push([x, h - 1 - up]);
     }
   }
   while (queue.length) {
@@ -106,7 +117,7 @@ for (const r of ROOMS) {
         }
         if (!ok) fail(`${r.id}: platform at (${x}..${run - 1},${y}) cannot be reached`);
       }
-      if (/[A-Z]/.test(c)) {
+      if (/[A-Z0-9]/.test(c)) {
         const reach =
           y === h - 1 ? seen.has(`${x},${y - 1}`) || fall(x, y - 1) === null
           : y === 0 ? [...seen].some((k) => {

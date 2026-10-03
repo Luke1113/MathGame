@@ -47,7 +47,7 @@ export class Room {
         else if (c === '-') this.tiles[i] = ONEWAY;
         else if (c === '@') this.spawn = { x: x * TILE + TILE / 2, y: (y + 1) * TILE };
         else if (c === '&') this.lamps.push({ x: x * TILE + TILE / 2, y: (y + 1) * TILE });
-        else if (/[A-Z]/.test(c)) this.exitAt[i] = c;
+        else if (/[A-Z0-9]/.test(c)) this.exitAt[i] = c;
         else if (/[a-z]/.test(c)) this.placed.push({ key: `${def.id}:${c}${x},${y}`, tx: x, ty: y, spec: def.legend[c] });
       }
     }

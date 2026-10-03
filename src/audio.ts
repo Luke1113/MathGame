@@ -19,7 +19,7 @@ interface NoiseOpts {
   sweepTo?: number;
 }
 
-type DroneKind = 'room' | 'boss' | 'room2' | 'boss2' | 'none';
+type DroneKind = 'room' | 'boss' | 'room2' | 'boss2' | 'room3' | 'boss3' | 'none';
 
 /** Map a natural number to a pitch from the harmonic series, folded into one octave. */
 export function pitchOf(v: number): number {
@@ -161,7 +161,7 @@ export class Sound {
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    const boss = kind === 'boss' || kind === 'boss2';
+    const boss = kind === 'boss' || kind === 'boss2' || kind === 'boss3';
     gain.gain.linearRampToValueAtTime(boss ? 0.16 : 0.11, now + 3);
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
@@ -171,9 +171,18 @@ export class Sound {
     this.out(gain, 0.4);
 
     // the other side of zero hums a minor third higher, uneasy
-    const base = { room: 55, boss: 41.2, room2: 65.4, boss2: 49, none: 55 }[kind];
+    // functions hum in stacked fifths: orderly, cold
+    const base = { room: 55, boss: 41.2, room2: 65.4, boss2: 49, room3: 49, boss3: 36.7, none: 55 }[kind];
     const nodes: AudioScheduledSourceNode[] = [];
-    const ratios = { room: [1, 1.5, 2.003], boss: [1, 1.498, 2.01, 1.06], room2: [1, 1.189, 1.5, 2.002], boss2: [1, 1.189, 1.414, 2.01], none: [1] }[kind];
+    const ratios = {
+      room: [1, 1.5, 2.003],
+      boss: [1, 1.498, 2.01, 1.06],
+      room2: [1, 1.189, 1.5, 2.002],
+      boss2: [1, 1.189, 1.414, 2.01],
+      room3: [1, 1.5, 2.25, 3.002],
+      boss3: [1, 1.5, 2.25, 2.718],
+      none: [1],
+    }[kind];
     for (const r of ratios) {
       const o = ctx.createOscillator();
       o.type = r === 1 ? 'sine' : 'triangle';

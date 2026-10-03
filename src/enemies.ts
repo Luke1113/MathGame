@@ -4,13 +4,15 @@ import { Q } from './num';
 import { groundAt, moveBody, type Body } from './physics';
 import type { Room } from './room';
 
-export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'orbiter' | 'bound' | 'gate' | 'door' | 'whole' | 'piece' | 'wedge';
+export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'orbiter' | 'bound' | 'gate' | 'door' | 'whole' | 'piece' | 'wedge' | 'plotter' | 'doubler';
 
 export interface World {
   room: Room;
   px: number;
   py: number;
   shoot(x: number, y: number, vx: number, vy: number): void;
+  /** Fire along a graph toward (tx, ty), after showing it. */
+  plot(x: number, y: number, path: 'sin' | 'para', tx: number, ty: number): void;
 }
 
 export class Enemy implements Body {
@@ -31,6 +33,14 @@ export class Enemy implements Body {
   age = 0;
   /** Where a piece is drawn to, while it seeks the rest of its whole. */
   mergeTo: { x: number; y: number } | null = null;
+  /** e^pow: no number can lessen it until ln counts it back to pow. */
+  ePow: number | null = null;
+  /** Other numbers a door also opens to (both roots of x² = 16). */
+  alts: Q[] = [];
+  /** A plotter's graph: the curve it draws before firing along it. */
+  curve: 'sin' | 'para' = 'sin';
+  private plotT = 2 + Math.random();
+  private growT = 3;
   /** Wedges of a slice: attached to the circle until they break away. */
   attached = true;
   detachT = 0;
@@ -77,6 +87,11 @@ export class Enemy implements Body {
   get harmful(): boolean {
     return !this.solid && this.appear >= 1;
   }
+  /** Does this door open to x = v? */
+  opensTo(v: Q): boolean {
+    return this.ePow === null && (this.n.eq(v) || this.alts.some((a) => a.eq(v)));
+  }
+
   get negative(): boolean {
     return this.n.sign < 0;
   }
@@ -106,8 +121,10 @@ export class Enemy implements Body {
       this.w = this.h = 46 + 8 * d;
     } else if (this.kind === 'wedge') {
       this.w = this.h = 34;
-    } else if (this.kind === 'emitter') {
+    } else if (this.kind === 'emitter' || this.kind === 'plotter') {
       this.w = this.h = 30 + 6 * d;
+    } else if (this.kind === 'doubler') {
+      this.w = this.h = 26 + 8 * d;
     } else if (this.kind === 'bound') {
       this.w = 26 + 10 * d;
       this.h = 32;
@@ -117,7 +134,7 @@ export class Enemy implements Body {
   }
 
   private get floats(): boolean {
-    return ['drifter', 'emitter', 'orbiter', 'whole', 'piece', 'wedge'].includes(this.kind);
+    return ['drifter', 'emitter', 'orbiter', 'whole', 'piece', 'wedge', 'plotter', 'doubler'].includes(this.kind);
   }
 
   hitbox(): Rect {
@@ -127,7 +144,7 @@ export class Enemy implements Body {
 
   /** Knocked back by a blow; negative numbers are pulled toward it instead. */
   knock(fromX: number, power: number): void {
-    if (this.solid || this.kind === 'emitter' || this.kind === 'orbiter' || (this.kind === 'wedge' && this.attached)) return;
+    if (this.solid || this.kind === 'emitter' || this.kind === 'plotter' || this.kind === 'orbiter' || (this.kind === 'wedge' && this.attached)) return;
     const s = (Math.sign(this.cx - fromX) || 1) * (this.negative ? -0.6 : 1);
     if (this.floats) {
       this.vx = s * power * 1.3;
@@ -201,6 +218,35 @@ export class Enemy implements Body {
       case 'piece':
         this.drift(dt, w, dx, dy, haste);
         break;
+      case 'doubler':
+        // growth that grows: twice itself, again and again
+        this.drift(dt, w, dx, dy, haste);
+        this.growT -= dt;
+        if (this.growT <= 0) {
+          this.growT = 3;
+          const next = this.n.mul(Q.int(2));
+          if (Math.abs(next.approx) > 128) {
+            for (let i = 0; i < 8; i++) {
+              const a = (i / 8) * Math.PI * 2;
+              w.shoot(this.cx, this.cy, Math.cos(a) * 200, Math.sin(a) * 200);
+            }
+            this.n = this.start;
+          } else this.n = next;
+          this.popT = 1;
+          this.resize();
+        }
+        break;
+      case 'plotter': {
+        this.y = this.homeY - this.h / 2 + Math.sin(this.t * 1.1) * 5;
+        this.plotT -= dt;
+        if (this.plotT <= 0 && Math.hypot(dx, dy) < 620) {
+          w.plot(this.cx, this.cy, this.curve, w.px, w.py);
+          this.plotT = 3.4 + Math.random() * 0.8;
+          this.chargeT = 0.9;
+        }
+        this.chargeT = Math.max(0, this.chargeT - dt);
+        break;
+      }
       case 'orbiter': {
         // goes around its centre forever, at radius 2 tiles
         this.orbitA += dt * 1.1 * (this.negative ? -1 : 1);
@@ -311,7 +357,7 @@ export class Enemy implements Body {
       return;
     }
 
-    let size = this.kind === 'emitter' || this.kind === 'wedge' ? 22 : this.kind === 'whole' ? 36 : this.kind === 'drifter' || this.kind === 'orbiter' || this.kind === 'piece' ? 28 : 32;
+    let size = this.kind === 'emitter' || this.kind === 'wedge' || this.kind === 'plotter' ? 22 : this.kind === 'whole' ? 36 : this.kind === 'drifter' || this.kind === 'orbiter' || this.kind === 'piece' ? 28 : 32;
     size += this.popT * 12;
     const by = this.kind === 'walker' || this.kind === 'bound' ? this.y + this.h - (this.n.d !== 1 && !this.label ? 17 : 13) : cy;
     const glyph = (x: number, y: number) => {
@@ -319,6 +365,25 @@ export class Enemy implements Body {
       else drawQ(ctx, this.n, x, y, size, 600);
     };
 
+    if (this.kind === 'plotter') {
+      // it draws graphs: a frame, and the f that names it
+      const r = this.w / 2;
+      ctx.strokeRect(cx - r, cy - r, r * 2, r * 2);
+      ctx.globalAlpha = a * (this.chargeT > 0 ? 0.9 : 0.4);
+      ctx.font = 'italic 500 13px "Cormorant Garamond", Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('f', cx - r + 7, cy - r + 8);
+      ctx.globalAlpha = a;
+    }
+    if (this.kind === 'doubler') {
+      const r = this.w / 2;
+      ctx.globalAlpha = a * 0.35;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * (1 + (3 - this.growT) / 6), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = a;
+    }
     if (this.kind === 'whole') {
       // a whole circle, waiting to be broken
       const r = this.w / 2;

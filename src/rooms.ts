@@ -10,14 +10,20 @@
  */
 
 import { CHAPTER_TWO } from './rooms2';
+import { CHAPTER_THREE } from './rooms3';
 
 /** A number as written in a map: a whole number, or [numerator, denominator]. */
 export type NumSpec = number | [number, number];
 
 export type EntitySpec =
   /** `label` shows a number in another form until first struck, e.g. "2^5" for 32. */
-  | { k: 'walker'; n: NumSpec; label?: string }
-  | { k: 'drifter'; n: NumSpec; label?: string }
+  /** `pow` makes it e^pow: no number can lessen it until ln counts it back. */
+  | { k: 'walker'; n: NumSpec; label?: string; pow?: number }
+  | { k: 'drifter'; n: NumSpec; label?: string; pow?: number }
+  /** Draws a graph toward x, then fires along it. */
+  | { k: 'plotter'; n: NumSpec; curve: 'sin' | 'para' }
+  /** Doubles itself every few seconds. */
+  | { k: 'doubler'; n: number }
   | { k: 'emitter'; n: NumSpec }
   | { k: 'orbiter'; n: NumSpec }
   /** A whole: cannot be lessened, only broken — a whole number k breaks it into k equal pieces. */
@@ -27,7 +33,9 @@ export type EntitySpec =
   | { k: 'bound'; n: number }
   | { k: 'gate'; n: number; w: number; h: number }
   /** A door opens to its number. `sign` is what is written on it, if not the number itself. */
-  | { k: 'door'; n: NumSpec; h: number; sign?: string }
+  | { k: 'door'; n: NumSpec; h: number; sign?: string; alts?: NumSpec[] }
+  /** A gate of e^pow: ln turns it into the plain number pow, which then opens it. */
+  | { k: 'egate'; pow: number; h: number }
   /** A door in the plane that opens when x has stood at every point in the room. */
   | { k: 'pointdoor'; h: number; sign: string }
   /** A point of the plane, at coordinates (a, b) of the room's axes. */
@@ -36,7 +44,13 @@ export type EntitySpec =
   | { k: 'seal'; w: number; h: number; until: string }
   | { k: 'shrine'; give: string }
   | { k: 'text'; s: string }
-  | { k: 'boss'; which: 'zero' | 'pi' };
+  | { k: 'boss'; which: 'zero' | 'pi' | 'e' };
+
+/** A graph that can be stood on. Units are tiles; y is the surface, measured down. */
+export type CurveSpec =
+  | { k: 'line'; x0: number; x1: number; y0: number; y1: number; label?: string }
+  | { k: 'sin'; x0: number; x1: number; y: number; amp: number; period: number; speed: number; label?: string }
+  | { k: 'para'; x0: number; x1: number; vx: number; vy: number; a: number; label?: string };
 
 export interface RoomDef {
   id: string;
@@ -48,8 +62,12 @@ export interface RoomDef {
   chapter?: number;
   /** Tile corner where a room's coordinate axes cross. */
   axes?: { ox: number; oy: number };
-  /** Some places here are reached only with the upward dash (√2). */
+  /** Some places here are reached only with the upward dash (y). */
   dash?: boolean;
+  /** Some places here are reached only by ⌊x⌋'s stairs. */
+  stairs?: boolean;
+  /** Graphs to stand on. */
+  curves?: CurveSpec[];
 }
 
 const CHAPTER_ONE: RoomDef[] = [
@@ -377,7 +395,7 @@ const CHAPTER_ONE: RoomDef[] = [
   },
 ];
 
-export const ROOMS: RoomDef[] = [...CHAPTER_ONE, ...CHAPTER_TWO];
+export const ROOMS: RoomDef[] = [...CHAPTER_ONE, ...CHAPTER_TWO, ...CHAPTER_THREE];
 
 export const ROOM_BY_ID: Record<string, RoomDef> = Object.fromEntries(ROOMS.map((r) => [r.id, r]));
 
@@ -443,6 +461,35 @@ export const GLYPHS: Record<string, GlyphInfo> = {
     name: 'root',
     line: 'What was grown can be undone.',
     hint: '√ (or R), then a digit  —  that root of x:   81, √, 2  makes 9      27, √, 3  makes 3\nSome roots never end. Those cannot be held.',
+  },
+  ax: {
+    name: 'the line',
+    line: 'Every rule draws a line.',
+    hint: 'F  —  fire the function, carrying x      W / S  —  aim it up or down\nQ  —  choose among the functions you know',
+  },
+  sin: {
+    name: 'sine',
+    line: 'Some rules return to where they began.',
+    hint: 'F  —  a wave that weaves as it flies.   Its height is x; a negative x turns it over.',
+  },
+  'x²': {
+    name: 'the square',
+    line: 'Everything thrown comes down along a parabola.',
+    hint: 'F  —  lob x in an arc.   The arc is as high as x; a negative x throws it downward.',
+  },
+  '⌊x⌋': {
+    name: 'the floor',
+    line: 'Every number has a floor beneath it.',
+    hint: 'F  —  build ⌊x⌋ steps in front of you.   ⌊5.7⌋ = 5: hold more, climb higher.',
+  },
+  ln: {
+    name: 'the logarithm',
+    line: 'What has grown can be counted back.',
+    hint: 'F  —  a slow shot that counts growth back:   ln e^3 = 3.   It carries no x.',
+  },
+  e: {
+    name: 'e',
+    line: 'It grows by exactly as much as it is.',
   },
   'π': {
     name: 'pi',

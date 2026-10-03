@@ -1,5 +1,8 @@
 import { Sound } from './audio';
 import { Zero, type Boss, type BossHost } from './boss';
+import { Curve } from './curves';
+import { EBoss, sup } from './eboss';
+import { CurveShot } from './functions';
 import { clamp, damp, overlaps, pal, rectCircle, serif, setPalette, TILE, VIEW_H, VIEW_W } from './constants';
 import { drawQ, drawRich, qWidth } from './draw';
 import { Enemy, makeEnemy, type Shot, type World } from './enemies';
@@ -71,11 +74,15 @@ const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 const OPS_ONE = ['+', '−', '×', '÷', '='];
 const OPS_TWO = ['±', '/', '^', '√', 'y'];
 const CHAPTER_ONE_GLYPHS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '+', '−', '×', '÷', '='];
+const CHAPTER_TWO_GLYPHS = ['±', '/', '^', '√', 'y', 'π'];
+/** x's functions, in the order Q cycles through them. */
+const FUNCTIONS = ['ax', 'sin', 'x²', '⌊x⌋', 'ln'];
 const FLOOR_Y = 14 * TILE;
 
 const CHAPTERS: Record<number, { numeral: string; name: string; sub: string }> = {
   1: { numeral: 'I', name: 'ARITHMETIC', sub: 'the first count' },
   2: { numeral: 'II', name: 'THE OTHER SIDE', sub: 'numbers less than nothing' },
+  3: { numeral: 'III', name: 'FUNCTIONS', sub: 'every rule draws a line' },
 };
 
 const ENDINGS: Record<number, { glyph: string; line: string; more: string; done: string; next: string; foot: string }> = {
@@ -93,6 +100,14 @@ const ENDINGS: Record<number, { glyph: string; line: string; more: string; done:
     more: 'Every fraction falls short of it. Only π is equal to π.',
     done: 'II  —  THE OTHER SIDE',
     next: 'III  —  FUNCTIONS',
+    foot: 'beneath the circle, the floor has opened',
+  },
+  3: {
+    glyph: 'e',
+    line: 'It grows by exactly as much as it is.',
+    more: 'And every growth begins at one:  e⁰ = 1.',
+    done: 'III  —  FUNCTIONS',
+    next: 'IV  —  CALCULUS',
     foot: 'to be continued',
   },
 };
@@ -100,6 +115,7 @@ const ENDINGS: Record<number, { glyph: string; line: string; more: string; done:
 const BOSS_TITLES: Record<string, [string, string]> = {
   zero: ['ZERO', 'the number that cannot be lessened'],
   pi: ['PI', 'the number that never ends'],
+  e: ['E', 'the number that grows by what it is'],
 };
 
 /** Draw text with manual letter spacing, centred on x. */
@@ -134,6 +150,15 @@ export class Game {
   private motes: Mote[] = [];
   private points: Point[] = [];
   private drops: Drop[] = [];
+  /** Graphs to stand on, and the one x stands on now. */
+  private curves: Curve[] = [];
+  private onCurve: Curve | null = null;
+  private curveDrop = 0;
+  /** Shots that fly along graphs: x's functions, and those fired at x. */
+  private cshots: CurveShot[] = [];
+  /** The function F fires; Q chooses another. */
+  private fn = 'ax';
+  private fnCd = 0;
   /** Pieces broken from one whole share a group number. */
   private groupSeq = 0;
   private seals: Seal[] = [];
@@ -225,6 +250,9 @@ export class Game {
     this.motes = [];
     this.points = [];
     this.drops = [];
+    this.cshots = [];
+    this.curves = (def.curves ?? []).map((c) => Curve.fromSpec(c));
+    this.onCurve = null;
     this.seals = [];
     this.boss = null;
     this.bossId = '';
@@ -244,19 +272,38 @@ export class Game {
         case 'bound': {
           const label = s.k === 'walker' || s.k === 'drifter' ? (s.label ?? null) : null;
           const e = makeEnemy(s.k, Q.from(s.n), pl.key, pl.tx, pl.ty, label);
+          if ((s.k === 'walker' || s.k === 'drifter') && s.pow) {
+            e.ePow = s.pow;
+            e.label = `e^${s.pow}`;
+            e.resize();
+          }
+          e.appear = 1;
+          this.enemies.push(e);
+          break;
+        }
+        case 'plotter':
+        case 'doubler': {
+          const e = makeEnemy(s.k, Q.from(s.n), pl.key, pl.tx, pl.ty);
+          if (s.k === 'plotter') e.curve = s.curve;
           e.appear = 1;
           this.enemies.push(e);
           break;
         }
         case 'gate':
         case 'door':
+        case 'egate':
         case 'pointdoor': {
           if (this.save.opened.includes(pl.key)) break;
           const kind = s.k === 'gate' ? 'gate' : 'door';
-          const n = s.k === 'pointdoor' ? Q.ZERO : Q.from(s.n);
+          const n = s.k === 'pointdoor' ? Q.ZERO : s.k === 'egate' ? Q.int(s.pow) : Q.from(s.n);
           const e = new Enemy(kind, n, pl.key);
           const w = s.k === 'gate' ? s.w : 1;
           if (s.k === 'door' && s.sign) e.sign = s.sign;
+          if (s.k === 'door' && s.alts) e.alts = s.alts.map((a) => Q.from(a));
+          if (s.k === 'egate') {
+            e.ePow = s.pow;
+            e.sign = `e^${s.pow}`;
+          }
           if (s.k === 'pointdoor') {
             e.sign = s.sign;
             e.needsPoints = true;
@@ -309,14 +356,22 @@ export class Game {
         case 'boss':
           if (this.save.bosses.includes(s.which)) break;
           this.bossId = s.which;
-          this.boss = s.which === 'zero' ? new Zero(this.bossHost(), fx, pl.ty * TILE + TILE / 2) : new Pi(this.bossHost(), fx, pl.ty * TILE + TILE / 2);
+          {
+            const by = pl.ty * TILE + TILE / 2;
+            this.boss =
+              s.which === 'zero' ? new Zero(this.bossHost(), fx, by) : s.which === 'pi' ? new Pi(this.bossHost(), fx, by) : new EBoss(this.bossHost(), fx, by);
+          }
           break;
       }
     }
     this.lamps = this.room.lamps.map((l) => ({ ...l, near: true }));
     this.roomTitle = { s: def.name, t: 0 };
-    this.sfx.setDrone(this.boss ? 'none' : this.chapter === 2 ? 'room2' : 'room');
+    this.sfx.setDrone(this.boss ? 'none' : this.roomDrone);
     this.fadeA = 1;
+  }
+
+  private get roomDrone(): 'room' | 'room2' | 'room3' {
+    return this.chapter === 3 ? 'room3' : this.chapter === 2 ? 'room2' : 'room';
   }
 
   private snapCamera(): void {
@@ -422,6 +477,33 @@ export class Game {
     this.setMode('chapter');
   }
 
+  /** Start at the top of Chapter III, with everything Chapters I and II teach. */
+  private chapterThree(): void {
+    this.save = freshSave();
+    this.save.has = [...CHAPTER_ONE_GLYPHS, ...CHAPTER_TWO_GLYPHS];
+    this.save.bosses = ['zero', 'pi'];
+    this.save.chapters = [1, 2, 3];
+    for (const def of ROOMS) {
+      if ((def.chapter ?? 1) === 3) continue;
+      const room = new Room(def);
+      for (const pl of room.placed) {
+        if (pl.spec.k === 'shrine') this.save.taken.push(pl.key);
+        if (pl.spec.k === 'gate' || pl.spec.k === 'door' || pl.spec.k === 'pointdoor') this.save.opened.push(pl.key);
+      }
+    }
+    this.loadRoom('graph');
+    const lamp = this.room.lamps[0];
+    this.save.lamp = { room: 'graph', x: lamp.x, y: lamp.y };
+    writeSave(this.save);
+    this.hasSave = true;
+    this.resetPlayer();
+    const hole = this.room.exitCells('S')!;
+    this.player.place((hole.cells[0] + 1) * TILE, TILE * 2);
+    this.snapCamera();
+    this.chapterNo = 3;
+    this.setMode('chapter');
+  }
+
   private continueGame(): void {
     this.save = loadSave() ?? freshSave();
     this.respawn();
@@ -489,6 +571,7 @@ export class Game {
       },
       shoot: (x, y, vx, vy, digit) => g.shots.push({ x, y, vx, vy, r: digit ? 6 + digit * 0.9 : 4, life: 5, dead: false, digit }),
       reward: (a) => g.reward(a),
+      plot: (x, y, path, tx, ty) => g.plot(x, y, path, tx, ty),
       shake: (a) => g.shake(a),
       flash: (a) => g.flash(a),
       hitstop: (t) => g.hitstop(t),
@@ -510,13 +593,14 @@ export class Game {
       },
       onIntro: () => {
         g.sealExit(true);
-        g.sfx.setDrone(g.chapter === 2 ? 'boss2' : 'boss');
+        g.sfx.setDrone(g.chapter === 3 ? 'boss3' : g.chapter === 2 ? 'boss2' : 'boss');
         g.bossTitleT = 0;
       },
       onResolved: () => {
         const id = g.bossId;
         if (!g.save.bosses.includes(id)) g.save.bosses.push(id);
         if (id === 'zero') g.learn('0');
+        if (id === 'e') g.learn('e');
         writeSave(g.save);
         g.sealExit(false);
         g.openSeals(id);
@@ -533,7 +617,7 @@ export class Game {
   /** Close (or reopen) the way x came in, while a boss is fought. */
   private sealExit(on: boolean): void {
     const map = this.room.def.map;
-    for (let y = 0; y < map.length; y++) if (/[A-Z]/.test(map[y][0])) this.room.setTile(0, y, on ? SOLID : EMPTY);
+    for (let y = 0; y < map.length; y++) if (/[A-Z0-9]/.test(map[y][0])) this.room.setTile(0, y, on ? SOLID : EMPTY);
   }
 
   private openSeals(until: string): void {
@@ -693,7 +777,7 @@ export class Game {
         if (e.needsPoints) {
           this.sfx.refuse();
           this.float('stand where it says', e.cx, e.y - 44, 18);
-        } else if (v.eq(e.n)) this.openDoor(e);
+        } else if (e.opensTo(v)) this.openDoor(e);
         else {
           this.sfx.refuse();
           this.float(e.sign ? '≠' : `${v} ≠ ${e.n}`, e.cx, e.y - 44, 20);
@@ -707,7 +791,7 @@ export class Game {
       return;
     }
     const view = { x: this.cam.x, y: this.cam.y, w: VIEW_W, h: VIEW_H };
-    const equal = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()));
+    const equal = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.ePow === null && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()));
     const bossHit = !!this.boss && this.boss.matches(v);
     // the nearest equal, and whatever equals stand close beside it
     const targets: Enemy[] = [];
@@ -801,7 +885,8 @@ export class Game {
   private openDoor(e: Enemy): void {
     this.openGate(e);
     this.hitstop(0.25);
-    const said = e.needsPoints ? 'there' : e.sign ? `x = ${e.n}` : `${e.n} = ${e.n}`;
+    const v = this.player.value;
+    const said = e.needsPoints ? 'there' : e.sign ? `x = ${v && e.opensTo(v) ? v : e.n}` : `${e.n} = ${e.n}`;
     this.float(said, e.cx, e.y - 44, 24);
   }
 
@@ -830,6 +915,138 @@ export class Game {
     this.hitstop(0.14);
     this.shake(6);
     this.flash(0.2);
+  }
+
+  /** Fire along a graph at x: shown first, then followed. */
+  private plot(x: number, y: number, path: 'sin' | 'para', tx: number, ty: number): void {
+    const dir = tx >= x ? 1 : -1;
+    const run = Math.max(96, Math.abs(tx - x));
+    if (path === 'para') {
+      const span = Math.min(620, run);
+      const slope = (ty - y) / span;
+      this.cshots.push(new CurveShot('para', x, y, dir, slope, 90 + Math.random() * 70, span, 260, null, false, 0.9, 3.2));
+    } else {
+      const slope = clamp((ty - y) / run, -1.5, 1.5);
+      this.cshots.push(new CurveShot('sin', x, y, dir, slope, 36, 0, 230, null, false, 0.9, 3.2));
+    }
+    this.sfx.tone(523, 0.5, { vol: 0.04, wet: 0.6 });
+  }
+
+  private learnedFunctions(): string[] {
+    return FUNCTIONS.filter((f) => this.has(f));
+  }
+
+  private cycleFunction(): void {
+    const fns = this.learnedFunctions();
+    if (!fns.length) return this.sfx.refuse();
+    this.fn = fns[(fns.indexOf(this.fn) + 1) % fns.length];
+    this.sfx.compose();
+    this.float(this.fn === 'ax' ? 'y = ax' : this.fn === '⌊x⌋' ? '⌊x⌋' : this.fn === 'ln' ? 'ln' : `y = ${this.fn === 'sin' ? 'a·sin x' : 'ax²'}`);
+  }
+
+  /** F: x's chosen function, carrying x. */
+  private fireFunction(): void {
+    const p = this.player;
+    if (!this.has(this.fn)) {
+      const fns = this.learnedFunctions();
+      if (!fns.length) return this.sfx.refuse();
+      this.fn = fns[0];
+    }
+    if (this.fnCd > 0) return;
+    const v = p.value;
+    if (!v && this.fn !== 'ln') return this.sfx.refuse();
+    const sx = p.cx + p.facing * 10;
+    const sy = p.y + 12;
+    const dir = p.facing;
+    const aim = this.input.down('up') ? -1 : this.input.down('down') && !p.onGround ? 1 : 0;
+    this.fnCd = 0.38;
+    switch (this.fn) {
+      case 'ax':
+        this.cshots.push(new CurveShot('line', sx, sy, dir, aim, 0, 0, 620, v, true, 0, 1.1));
+        break;
+      case 'sin': {
+        const amp = clamp(Math.abs(v!.approx), 0.5, 3) * 20 * (v!.sign < 0 ? -1 : 1);
+        this.cshots.push(new CurveShot('sin', sx, sy, dir, aim * 0.5, amp, 0, 420, v, true, 0, 1.6));
+        break;
+      }
+      case 'x²': {
+        const amp = clamp(Math.abs(v!.approx), 0.5, 5) * 32 * (v!.sign < 0 ? -1 : 1);
+        this.cshots.push(new CurveShot('para', sx, sy, dir, 0, amp, 224, 340, v, true, 0, 2));
+        break;
+      }
+      case '⌊x⌋': {
+        const n = Math.min(6, Math.floor(Math.abs(v!.approx)));
+        if (n < 1) {
+          this.sfx.refuse();
+          this.float(`⌊${v}⌋ = 0`);
+          return;
+        }
+        // one staircase at a time
+        this.curves = this.curves.filter((c) => !c.steps);
+        this.curves.push(Curve.stairs(p.cx, p.y + p.h, dir, n, this.time));
+        this.float(`⌊${v}⌋ = ${n}`);
+        this.sfx.tone(196, 0.6, { vol: 0.1, type: 'triangle', wet: 0.4 });
+        return;
+      }
+      case 'ln':
+        this.cshots.push(new CurveShot('ln', sx, sy, dir, aim, 0, 0, 300, null, true, 0, 1.6));
+        break;
+    }
+    this.sfx.swing();
+  }
+
+  /** ln counts growth back: eᵏ becomes k; ln 1 = 0 undoes a 1; anything else never ends. */
+  private lnHit(e: Enemy): void {
+    if (e.ePow !== null) {
+      const k = e.ePow;
+      e.ePow = null;
+      e.n = Q.int(k);
+      if (e.kind === 'door') e.sign = null;
+      else e.label = null;
+      e.popT = 1;
+      e.resize();
+      this.float(`ln e${sup(k)} = ${k}`, e.cx, e.y - 18, 20);
+      this.sfx.nullify();
+      return;
+    }
+    if (e.n.eq(Q.ONE) && !e.solid && !e.armored && e.kind !== 'whole') {
+      this.float('ln 1 = 0', e.cx, e.y - 18, 18);
+      this.kill(e);
+      return;
+    }
+    this.sfx.blocked();
+    this.float(`ln ${e.n} never ends`, e.cx, e.y - 14, 15);
+  }
+
+  /** x and the curves: land on a graph from above, or keep standing on it as it moves. */
+  private standOnCurves(prevFeet: number): void {
+    const p = this.player;
+    if (this.curveDrop > 0 || p.vy < 0 || p.dashing) {
+      if (p.vy < 0) this.onCurve = null;
+      return;
+    }
+    const feet = p.y + p.h;
+    let best: number | null = null;
+    let hit: Curve | null = null;
+    for (const c of this.curves) {
+      const y = c.yAt(p.cx, this.time);
+      if (y === null) continue;
+      // keep to the graph x stands on: up a step of up to 34px, or down a slope of up to 12px a frame
+      const standing = this.onCurve === c && feet <= y + 34 && feet >= y - 12;
+      const crossing = prevFeet <= y + 2 && feet >= y - 0.5;
+      // walking along the ground into a graph that begins a step above: step onto it
+      const stepping = p.onGround && feet - y >= 0 && feet - y <= 34;
+      if ((standing || crossing || stepping) && (best === null || y < best)) {
+        best = y;
+        hit = c;
+      }
+    }
+    if (best !== null) {
+      p.y = best - p.h;
+      p.vy = 0;
+      p.onGround = true;
+      this.onCurve = hit;
+    } else this.onCurve = null;
   }
 
   /** A whole struck with a whole number k breaks into k equal pieces. */
@@ -915,21 +1132,24 @@ export class Game {
     }
   }
 
-  private strike(e: Enemy): void {
+  /** x strikes an enemy with v: by hand, or (ranged) carried along a function. */
+  private strike(e: Enemy, given?: Q): void {
     const p = this.player;
-    const v = p.value ?? Q.ZERO;
+    const v = given ?? p.value ?? Q.ZERO;
+    const ranged = given !== undefined;
     const blocked = (msg: string) => {
       this.sfx.blocked();
       this.float(msg, e.cx, e.y - 12, 16);
-      p.recoil(e.cx, 190);
+      if (!ranged) p.recoil(e.cx, 190);
       e.knock(p.cx, 90);
       e.hurtT = 0.05;
       this.hitstop(0.04);
     };
+    if (e.ePow !== null) return blocked(`e${sup(e.ePow)} − ${v} never ends`);
     if (e.kind === 'door') {
       // A door yields to its own number: strike it, or equate beside it.
       if (e.needsPoints) return blocked('stand where it says');
-      if (v.eq(e.n)) return this.openDoor(e);
+      if (e.opensTo(v)) return this.openDoor(e);
       return blocked(e.sign ? '≠' : `${v} ≠ ${e.n}`);
     }
     if (e.kind === 'whole') {
@@ -1014,7 +1234,7 @@ export class Game {
         if (this.modeT > 10 && events.length) {
           this.hasSave = true;
           this.menu = 1;
-          this.sfx.setDrone(this.chapter === 2 ? 'room2' : 'room');
+          this.sfx.setDrone(this.roomDrone);
           this.fadeA = 1;
           this.setMode('play');
         }
@@ -1025,7 +1245,8 @@ export class Game {
   }
 
   private menuItems(): string[] {
-    return this.hasSave ? ['begin anew', 'continue', 'begin at chapter II'] : ['begin', 'begin at chapter II'];
+    const at = ['begin at chapter II', 'begin at chapter III'];
+    return this.hasSave ? ['begin anew', 'continue', ...at] : ['begin', ...at];
   }
 
   private updateTitle(events: Ev[]): void {
@@ -1037,6 +1258,7 @@ export class Game {
         const it = items[this.menu];
         if (it === 'continue') this.continueGame();
         else if (it === 'begin at chapter II') this.chapterTwo();
+        else if (it === 'begin at chapter III') this.chapterThree();
         else this.newGame();
         return;
       }
@@ -1069,10 +1291,19 @@ export class Game {
         case 'equate':
           this.onEquate();
           break;
+        case 'fire':
+          this.fireFunction();
+          break;
+        case 'cycle':
+          this.cycleFunction();
+          break;
         default:
           break;
       }
     }
+    this.fnCd = Math.max(0, this.fnCd - realDt);
+    this.curveDrop = Math.max(0, this.curveDrop - realDt);
+    if (this.onCurve && this.input.down('down') && events.some((e) => e.k === 'jump')) this.curveDrop = 0.3;
 
     // time: composing a number slows the world
     if (this.compose) {
@@ -1108,7 +1339,11 @@ export class Game {
     }
 
     const dt = realDt * this.timeScale;
+    const prevFeet = p.y + p.h;
     p.update(dt, this.input, this.room, this.sfx);
+    this.standOnCurves(prevFeet);
+    for (const c of this.curves) c.life -= dt;
+    this.curves = this.curves.filter((c) => c.life > 0);
 
     // leaving the room
     if (p.cx < 0) return this.transition('W');
@@ -1124,6 +1359,7 @@ export class Game {
         this.shots.push({ x, y, vx, vy, r: 4, life: 4, dead: false });
         this.sfx.fire();
       },
+      plot: (x, y, path, tx, ty) => this.plot(x, y, path, tx, ty),
     };
     for (const e of this.enemies) e.update(dt, world);
     this.boss?.update(dt);
@@ -1142,6 +1378,41 @@ export class Game {
         this.fx.burst(s.x, s.y, 4, { speed: 80, life: 0.3 });
       }
     }
+
+    // shots along graphs
+    for (const c of this.cshots) {
+      c.update(dt);
+      if (c.dead || c.tele > 0) continue;
+      const hd = c.head;
+      if (c.u > 10 && this.room.solidAtPx(hd.x, hd.y)) {
+        c.dead = true;
+        this.fx.burst(hd.x, hd.y, 6, { speed: 100, life: 0.3 });
+        continue;
+      }
+      if (hd.y > this.room.ph + 40) c.dead = true;
+      const r = c.friendly ? 12 : 8;
+      const box = { x: hd.x - r, y: hd.y - r, w: r * 2, h: r * 2 };
+      if (c.friendly) {
+        for (const e of this.enemies) {
+          if (e.dead || e.appear < 1 || !overlaps(box, e.hitbox())) continue;
+          c.dead = true;
+          if (c.path === 'ln') this.lnHit(e);
+          else if (c.value) this.strike(e, c.value);
+          break;
+        }
+        if (!c.dead && this.boss) {
+          const said = c.path === 'ln' ? this.boss.ln?.(hd.x, hd.y, r) : c.value ? this.boss.hit(box, c.value) : undefined;
+          if (said !== undefined) {
+            c.dead = true;
+            if (said) this.float(said, this.boss.x, this.boss.y - this.boss.r - 18, 18);
+          }
+        }
+      } else if (p.invuln <= 0 && !p.dashing && rectCircle({ x: p.x + 2, y: p.y + 2, w: p.w - 4, h: p.h - 2 }, hd.x, hd.y, 6)) {
+        c.dead = true;
+        this.hurtPlayer(hd.x);
+      }
+    }
+    this.cshots = this.cshots.filter((c) => !c.dead);
 
     // the strike
     const box = p.strikeBox();
@@ -1173,6 +1444,15 @@ export class Game {
           s.dead = true;
           this.fx.burst(s.x, s.y, 8, { speed: 160, life: 0.35, line: true });
         }
+      }
+      for (const c of this.cshots) {
+        if (c.friendly || c.tele > 0) continue;
+        const hd = c.head;
+        if (!rectCircle(box, hd.x, hd.y, 8)) continue;
+        c.dead = true;
+        struck = true;
+        this.fx.burst(hd.x, hd.y, 8, { speed: 160, life: 0.35, line: true });
+        this.sfx.hit(1);
       }
       const boss = this.boss;
       if (boss && p.value && !p.struck.has(boss)) {
@@ -1325,10 +1605,10 @@ export class Game {
 
   render(): void {
     const { ctx, canvas } = this;
-    if (this.mode === 'title') setPalette(false);
-    else if (this.mode === 'chapter') setPalette(this.chapterNo === 2);
-    else if (this.mode === 'end') setPalette(this.endChapter === 2);
-    else setPalette(this.chapter === 2);
+    if (this.mode === 'title') setPalette(1);
+    else if (this.mode === 'chapter') setPalette(this.chapterNo);
+    else if (this.mode === 'end') setPalette(this.endChapter);
+    else setPalette(this.chapter);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = pal.void;
@@ -1426,13 +1706,24 @@ export class Game {
     ctx.fillStyle = pal.air;
     ctx.fillRect(0, 0, r.pw, r.ph);
 
-    // graph paper
+    // graph paper: dots, or in Chapter III ruled lines, bolder every fifth
     ctx.fillStyle = pal.ink;
-    ctx.globalAlpha = 0.07;
     const gx0 = Math.max(0, Math.floor(camX / TILE));
     const gy0 = Math.max(0, Math.floor(camY / TILE));
-    for (let gx = gx0; gx <= gx0 + VIEW_W / TILE + 1; gx++) {
-      for (let gy = gy0; gy <= gy0 + VIEW_H / TILE + 1; gy++) ctx.fillRect(gx * TILE - 0.75, gy * TILE - 0.75, 1.5, 1.5);
+    if (pal.ruled) {
+      for (let gx = gx0; gx <= gx0 + VIEW_W / TILE + 1; gx++) {
+        ctx.globalAlpha = gx % 5 === 0 ? 0.09 : 0.04;
+        ctx.fillRect(gx * TILE - 0.5, camY, 1, VIEW_H);
+      }
+      for (let gy = gy0; gy <= gy0 + VIEW_H / TILE + 1; gy++) {
+        ctx.globalAlpha = gy % 5 === 0 ? 0.09 : 0.04;
+        ctx.fillRect(camX, gy * TILE - 0.5, VIEW_W, 1);
+      }
+    } else {
+      ctx.globalAlpha = 0.07;
+      for (let gx = gx0; gx <= gx0 + VIEW_W / TILE + 1; gx++) {
+        for (let gy = gy0; gy <= gy0 + VIEW_H / TILE + 1; gy++) ctx.fillRect(gx * TILE - 0.75, gy * TILE - 0.75, 1.5, 1.5);
+      }
     }
     ctx.globalAlpha = 1;
     if (r.def.axes) this.drawAxes(r.def.axes.ox, r.def.axes.oy);
@@ -1451,6 +1742,7 @@ export class Game {
     ctx.globalAlpha = 0.65;
     ctx.stroke(r.platforms());
     ctx.globalAlpha = 1;
+    for (const c of this.curves) c.draw(ctx, this.time);
 
     // inscriptions
     ctx.fillStyle = pal.ink;
@@ -1532,6 +1824,7 @@ export class Game {
 
     for (const e of this.enemies) e.draw(this.ctx);
     this.boss?.draw(ctx);
+    for (const c of this.cshots) c.draw(ctx);
 
     ctx.fillStyle = pal.ink;
     ctx.strokeStyle = pal.ink;
@@ -1654,6 +1947,10 @@ export class Game {
     for (const s of this.shots) add(s.x, s.y, 50, 0.6);
     for (const m of this.motes) add(m.x, m.y, 50, 0.6);
     for (const d of this.drops) add(d.x, d.y, 60, 0.6);
+    for (const c of this.cshots) {
+      const hd = c.head;
+      add(hd.x, hd.y, c.tele > 0 ? 40 : 70, 0.6);
+    }
     for (const pt of this.points) if (pt.lit) add(pt.x, pt.y, 120, 0.7);
     for (const t of this.texts) if (t.a > 0) add(t.x, t.y, 200, t.a * 0.6);
     this.boss?.lights(add);
@@ -1724,6 +2021,25 @@ export class Game {
       ctx.globalAlpha = full ? 0.6 + 0.35 * Math.sin(this.time * 4) : 0.3;
       ctx.font = serif(22);
       ctx.fillText('=', ex, by + 1);
+    }
+    // the functions x knows, and the one F will fire
+    const fns = this.learnedFunctions();
+    if (fns.length) {
+      let fxPos = 40;
+      ctx.textAlign = 'left';
+      ctx.font = serif(17);
+      for (const f of fns) {
+        const sel = f === this.fn;
+        ctx.globalAlpha = sel ? 0.9 : 0.3;
+        ctx.fillText(f, fxPos, VIEW_H - 30);
+        const w = ctx.measureText(f).width;
+        if (sel) ctx.fillRect(fxPos, VIEW_H - 18, w, 1);
+        fxPos += w + 16;
+      }
+      ctx.globalAlpha = 0.25;
+      ctx.font = serif(13, { italic: false, weight: 500 });
+      ctx.fillText('F  ·  Q', 40, VIEW_H - 56);
+      ctx.textAlign = 'center';
     }
     // the sign that fallen digits join x by
     if (this.has('+')) {
@@ -1835,6 +2151,7 @@ export class Game {
       ...(this.has('√') ? ([['√', 'then a digit      R  ·  √ 2 is the square root']] as [string, string][]) : []),
       ...(this.has('±') ? ([['the opposite', '−  then  −']] as [string, string][]) : []),
       ['equate', 'Enter   ·   =      (when the circle is full)'],
+      ...(this.learnedFunctions().length ? ([['function', 'F  fires  ·  Q  chooses  ·  W / S aim']] as [string, string][]) : []),
       ['slow time', 'L   ·   Num .'],
       ['return', 'Esc'],
     ];
@@ -1914,19 +2231,19 @@ export class Game {
       const sel = i === this.menu;
       ctx.globalAlpha = fade * (sel ? 0.95 : 0.3);
       ctx.font = serif(21);
-      ctx.fillText(sel ? `—  ${it}  —` : it, VIEW_W / 2, 378 + i * 32);
+      ctx.fillText(sel ? `—  ${it}  —` : it, VIEW_W / 2, 368 + i * 28);
     });
     ctx.globalAlpha = fade * 0.25;
     ctx.font = serif(13, { italic: false, weight: 500 });
-    spaced(ctx, 'CHAPTERS I – II  ·  PROTOTYPE', VIEW_W / 2, 512, 3);
+    spaced(ctx, 'CHAPTERS I – III  ·  PROTOTYPE', VIEW_W / 2, 516, 3);
     if (!document.hasFocus()) {
       ctx.globalAlpha = 0.5;
       ctx.font = serif(16);
-      ctx.fillText('click to focus', VIEW_W / 2, 482);
+      ctx.fillText('click to focus', VIEW_W / 2, 490);
     } else {
       ctx.globalAlpha = fade * 0.3;
       ctx.font = serif(15);
-      ctx.fillText('W / S to choose  ·  Space to begin', VIEW_W / 2, 482);
+      ctx.fillText('W / S to choose  ·  Space to begin', VIEW_W / 2, 490);
     }
     ctx.globalAlpha = 1;
   }

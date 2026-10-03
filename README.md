@@ -4,12 +4,14 @@
 
 A minimalist, dramatic action-platformer where mathematics is the combat system. You are **x**, an unknown, drawn into a dark world made of numbers. You fight by holding a number and changing it with arithmetic.
 
-The prototype has two chapters, which follow the school curriculum:
+The prototype has three chapters, which follow the school curriculum:
 
 - **Chapter I — Arithmetic** (elementary): counting, + − × ÷, divisibility, equality. Boss: Zero.
 - **Chapter II — The Other Side** (middle school): negative numbers, fractions, powers, Pythagoras, the coordinate plane, equations. Drawn in negative, black on white. Boss: π.
 
-Chapter II opens beneath Zero's arena once Zero is beaten. To start there directly, choose **begin at chapter II** on the title screen.
+- **Chapter III — Functions** (high school): functions as weapons and as ground, the floor function, logarithms. Drawn as a blueprint on ruled paper. Boss: e.
+
+Each chapter opens beneath the previous boss's arena. To start at a later chapter directly, choose **begin at chapter II** or **begin at chapter III** on the title screen.
 
 ## Run it
 
@@ -35,6 +37,7 @@ npm run check:rooms    # validate the chapter maps
 | `√`, then a digit (2 = square root) | `R` | |
 | the opposite of x | `-` then `-` | `−` then `−` |
 | equate | `Enter` or `=` | `Enter` |
+| fire a function · choose another | `F` · `Q` | |
 | slow time | `L` | `Num .` |
 | pause / controls | `Esc` | |
 
@@ -61,6 +64,17 @@ npm run check:rooms    # validate the chapter maps
 - **y, the other axis:** the dash follows the held direction, up and diagonally.
 - **The plane:** a door names coordinates; stand on those points.
 
+## The rules of Chapter III
+
+- **Functions carry x.** `F` fires the chosen function, and whatever it touches is struck with x. `Q` chooses another.
+  - **ax:** a straight beam; aim it with W / S.
+  - **sin:** a wave that weaves; its height is x, and a negative x turns it over.
+  - **x²:** a lob; the arc is as high as x.
+  - **⌊x⌋:** builds ⌊x⌋ steps in front of you (⌊5.7⌋ = 5). One wall can only be climbed this way.
+  - **ln:** counts growth back. Nothing can lessen e³, but ln turns it into 3. ln 1 = 0.
+- **Graphs are ground.** Walk up a line, ride a moving sine wave, cross a parabolic bowl.
+- **Plotters** draw the curve they are about to fire along. **Doublers** double every three seconds.
+
 ## Code map
 
 | File | Role |
@@ -74,6 +88,10 @@ npm run check:rooms    # validate the chapter maps
 | `src/draw.ts` | Stacked fractions and superscripts |
 | `src/boss.ts` | The boss interface, and Zero (Chapter I) |
 | `src/pi.ts` | π (Chapter II) |
+| `src/rooms3.ts` | Chapter III maps |
+| `src/curves.ts` | Graphs that can be stood on, and ⌊x⌋'s stairs |
+| `src/functions.ts` | Shots that fly along graphs |
+| `src/eboss.ts` | e (Chapter III) |
 | `src/audio.ts` | Synthesized sound (Web Audio); no audio files |
 | `src/room.ts`, `src/physics.ts` | Tile collision and terrain outlines |
 
