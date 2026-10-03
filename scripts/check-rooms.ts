@@ -36,6 +36,9 @@ for (const [letter, list] of exits) {
 const JUMP_ROWS = 3;
 /** With the upward dash (√2), a jump climbs about 7 tiles. */
 const DASH_ROWS = 6;
+/** Pixels a body can rise: a jump alone, or a jump with an upward dash at any moment (conservative). */
+const JUMP_RISE = 120;
+const DASH_RISE = 210;
 /** How many columns a jump can carry you, by rows climbed (from a running start). */
 const JUMP_SPAN = [6, 5, 5, 4];
 for (const r of ROOMS) {
@@ -92,10 +95,25 @@ for (const r of ROOMS) {
       const c = at(x, y);
       const spec = r.legend[c];
       if (spec?.k === 'shrine' && !seen.has(`${x},${y}`)) fail(`${r.id}: shrine '${spec.give}' at (${x},${y}) cannot be reached`);
+      // every lamp, and every platform, should be somewhere x can actually stand
+      if (c === '&' && !seen.has(`${x},${y}`)) fail(`${r.id}: lamp at (${x},${y}) cannot be reached`);
+      if (c === '-' && (x === 0 || at(x - 1, y) !== '-')) {
+        let run = x;
+        let ok = false;
+        while (at(run, y) === '-') {
+          if (seen.has(`${run},${y - 1}`)) ok = true;
+          run++;
+        }
+        if (!ok) fail(`${r.id}: platform at (${x}..${run - 1},${y}) cannot be reached`);
+      }
       if (/[A-Z]/.test(c)) {
         const reach =
           y === h - 1 ? seen.has(`${x},${y - 1}`) || fall(x, y - 1) === null
-          : y === 0 ? [...seen].some((k) => { const [sx, sy] = k.split(',').map(Number); return sy <= climb && Math.abs(sx - x) <= 2; })
+          : y === 0 ? [...seen].some((k) => {
+              // a ceiling exit is taken when the head (30px above the feet) passes y = 0
+              const [sx, sy] = k.split(',').map(Number);
+              return (sy + 1) * 32 - 30 <= (r.dash ? DASH_RISE : JUMP_RISE) && Math.abs(sx - x) <= 2;
+            })
           : seen.has(`${x},${y}`) || [...seen].some((k) => k === `${x},${y + 1}` || k === `${x},${y + 2}`);
         if (!reach && (x === 0 || x === w - 1 ? floor(x, y + 1) : true)) fail(`${r.id}: exit ${c} at (${x},${y}) cannot be reached`);
       }

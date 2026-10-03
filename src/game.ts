@@ -920,7 +920,7 @@ export class Game {
     // leaving the room
     if (p.cx < 0) return this.transition('W');
     if (p.cx > this.room.pw) return this.transition('E');
-    if (p.cy < 0) return this.transition('N');
+    if (p.y < 0) return this.transition('N');
     if (p.cy > this.room.ph) return this.transition('S');
 
     const world: World = {

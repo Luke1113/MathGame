@@ -44,6 +44,8 @@ export class Player implements Body {
   /** Direction of the current dash (unit vector). */
   private dashX = 1;
   private dashY = 0;
+  /** Upward speed a jump already had when an upward dash began; it is given back after. */
+  private dashCarry = 0;
   /** After learning √2, dashes follow the held direction, upward and diagonally too. */
   canDiag = false;
   wantStrike = false;
@@ -125,6 +127,7 @@ export class Player implements Body {
       const len = Math.hypot(dx, dy);
       this.dashX = dx / len;
       this.dashY = dy / len;
+      this.dashCarry = Math.min(this.vy, 0);
       this.dashT = DASH_T;
       this.dashCd = DASH_CD;
       this.jumpHeld = false;
@@ -137,8 +140,9 @@ export class Player implements Body {
       this.vx = DASH_V * this.dashX;
       this.vy = DASH_V * this.dashY;
       if (this.dashT <= 0) {
+        // an upward dash adds to a jump rather than replacing it
         this.vx = RUN * this.dashX;
-        this.vy = this.dashY < 0 ? DASH_V * this.dashY * 0.35 : 0;
+        this.vy = this.dashY < 0 ? Math.min(this.dashCarry, DASH_V * this.dashY * 0.5) : 0;
       }
     } else {
       // run
