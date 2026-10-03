@@ -9,9 +9,10 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "build:single": "npm run build && node scripts/inline.mjs",
-    "check:rooms": "node --experimental-strip-types --no-warnings scripts/check-rooms.ts"
+    "check:rooms": "tsx scripts/check-rooms.ts"
   },
   "devDependencies": {
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.2"
   }

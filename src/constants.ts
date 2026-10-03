@@ -2,9 +2,33 @@ export const TILE = 32;
 export const VIEW_W = 960;
 export const VIEW_H = 540;
 
-export const INK = '#ecebe6';
-export const VOID = '#000000';
-export const AIR = '#070707';
+/**
+ * The world's two colours. Chapter I is white ink on black; on the other side
+ * of zero (Chapter II) everything is its own negative: black ink on white.
+ */
+export const pal = {
+  ink: '#ecebe6',
+  void: '#000000',
+  air: '#070707',
+  /** Colour of the darkness that light cuts through, as r,g,b. */
+  fog: '0,0,0',
+  inverted: false,
+};
+
+export function setPalette(inverted: boolean): void {
+  pal.inverted = inverted;
+  if (inverted) {
+    pal.ink = '#17171b';
+    pal.void = '#f3f1eb';
+    pal.air = '#e8e6df';
+    pal.fog = '243,241,235';
+  } else {
+    pal.ink = '#ecebe6';
+    pal.void = '#000000';
+    pal.air = '#070707';
+    pal.fog = '0,0,0';
+  }
+}
 
 const SERIF = '"Cormorant Garamond", "EB Garamond", Georgia, "Times New Roman", serif';
 

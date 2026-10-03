@@ -1,4 +1,6 @@
-import { clamp, damp, easeInOut, easeOut, INK, Rect, rectCircle, serif } from './constants';
+import { clamp, damp, easeInOut, easeOut, pal, Rect, rectCircle, serif } from './constants';
+import { drawQ } from './draw';
+import { Q } from './num';
 import type { Fx } from './fx';
 import type { Player } from './player';
 import type { Sound } from './audio';
@@ -18,6 +20,27 @@ export interface BossHost {
   onCrack(x: number, y: number): void;
   onIntro(): void;
   onResolved(): void;
+  /** Place π on the floor for x to take (Chapter II). */
+  offerPi(x: number, y: number): void;
+  readonly piOffered: boolean;
+}
+
+/** What the game needs from any boss. */
+export interface Boss {
+  readonly x: number;
+  readonly y: number;
+  readonly r: number;
+  readonly vulnerable: boolean;
+  update(dt: number): void;
+  draw(ctx: CanvasRenderingContext2D): void;
+  lights(add: (x: number, y: number, r: number, a: number) => void): void;
+  touches(box: Rect): boolean;
+  /** A strike lands with x = v. Returns text to float when it is refused. */
+  struck(v: Q): string | null;
+  /** Equate pressed: true if this ends the fight. */
+  tryResolve(): boolean;
+  /** Would equating with x = v strike this boss? */
+  matches(v: Q): boolean;
 }
 
 type State =
@@ -45,14 +68,14 @@ const FILLS = [12, 24, 36];
 const RX = 0.78;
 
 /** Zero: the number that cannot be lessened. */
-export class Zero {
+export class Zero implements Boss {
   x: number;
   y: number;
   r = 0;
   private state: State = 'dormant';
   private st = 0;
   cracks = 0;
-  n = 0;
+  n = Q.ZERO;
   private attacks = 0;
   private nextAttack = 0;
   private targetX: number;
@@ -235,9 +258,9 @@ export class Zero {
         moveTo(clamp(this.x, minX, maxX), floorCy - 6, 2.5);
         if (Math.random() < dt * 40) h.fx.converge(this.x, this.y, 2, 260, 0.8);
         if (this.st > 1.4) {
-          this.n = FILLS[this.cracks];
+          this.n = Q.int(FILLS[this.cracks]);
           this.go('full');
-          h.sfx.composed(this.n);
+          h.sfx.composed(FILLS[this.cracks]);
         }
         break;
       }
@@ -249,14 +272,14 @@ export class Zero {
         break;
       }
       case 'release': {
-        const count = Math.min(20, this.n);
+        const count = Math.min(20, Math.round(Math.abs(this.n.approx)));
         for (let i = 0; i < count; i++) {
           const a = (i / count) * Math.PI * 2 - Math.PI / 2;
           h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * 250, Math.sin(a) * 250);
         }
         h.sfx.wave();
         h.shake(5);
-        this.n = 0;
+        this.n = Q.ZERO;
         this.go('hover');
         break;
       }
@@ -296,7 +319,7 @@ export class Zero {
           h.sfx.heartbeat();
           this.beat = 1.6;
         }
-        if (p.value !== 0 && this.st > 3.5) this.go('finale');
+        if (!p.value?.isZero && this.st > 3.5) this.go('finale');
         break;
       }
       case 'resolve': {
@@ -344,26 +367,31 @@ export class Zero {
    * A strike lands. Returns the text to float, or null when it simply bites.
    * Zero can only be lessened while it holds something.
    */
-  struck(v: number): string | null {
+  matches(v: Q): boolean {
+    return this.state === 'full' && this.n.eq(v);
+  }
+
+  struck(v: Q): string | null {
     const h = this.host;
     if (this.state !== 'full') {
       h.sfx.blocked();
-      return v === 0 ? '0 − 0' : `${v} > 0`;
+      return v.isZero ? '0 − 0' : `${v} > 0`;
     }
-    if (v === 0) {
+    if (v.isZero) {
       h.sfx.blocked();
       return '− 0';
     }
-    if (v > this.n) {
+    const left = this.n.sub(v);
+    if (v.gt(this.n) || !left) {
       h.sfx.blocked();
       return `${v} > ${this.n}`;
     }
-    this.n -= v;
+    this.n = left;
     this.hurtT = 0.15;
-    h.sfx.hit(v);
+    h.sfx.hit(Math.abs(v.approx));
     h.hitstop(0.06);
     h.shake(3);
-    if (this.n === 0) {
+    if (this.n.isZero) {
       this.cracks++;
       this.crackLines.push({ a: Math.random() * Math.PI * 2, len: 0.5 + Math.random() * 0.4 });
       this.crackLines.push({ a: Math.random() * Math.PI * 2, len: 0.3 + Math.random() * 0.3 });
@@ -379,7 +407,7 @@ export class Zero {
   }
 
   tryResolve(): boolean {
-    if (this.state !== 'await' || this.host.player.value !== 0) return false;
+    if (this.state !== 'await' || !this.host.player.value?.isZero) return false;
     this.go('resolve');
     this.host.sfx.resolve();
     this.host.flash(0.4);
@@ -389,8 +417,8 @@ export class Zero {
   draw(ctx: CanvasRenderingContext2D): void {
     if (!this.active) return;
     const h = this.host;
-    ctx.strokeStyle = INK;
-    ctx.fillStyle = INK;
+    ctx.strokeStyle = pal.ink;
+    ctx.fillStyle = pal.ink;
 
     // telegraph for slam
     if (this.state === 'slam' && this.landedAt < 0) {
@@ -440,10 +468,7 @@ export class Zero {
       if (this.state === 'full' || this.state === 'inhale') {
         const k = this.state === 'inhale' ? clamp(this.st / 1.4, 0, 1) : 1;
         ctx.globalAlpha = k;
-        ctx.font = serif(34 + (this.hurtT > 0 ? 6 : 0), { weight: 600 });
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(this.state === 'full' ? String(this.n) : '', this.x, this.y + 2);
+        if (this.state === 'full') drawQ(ctx, this.n, this.x, this.y + 2, 34 + (this.hurtT > 0 ? 6 : 0), 600);
         if (this.state === 'full') {
           // remaining time, drawn as a closing arc
           const left = 1 - this.st / 9;
@@ -494,7 +519,7 @@ export class Zero {
     }
 
     // the waiting sign between them
-    if (this.state === 'await' && h.player.value === 0) {
+    if (this.state === 'await' && h.player.value?.isZero) {
       const mx = (this.x + h.player.cx) / 2;
       const my = (this.y + h.player.cy) / 2 - 20;
       ctx.globalAlpha = clamp(this.st / 2, 0, 1) * (0.35 + 0.25 * Math.sin(this.t * 2));

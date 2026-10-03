@@ -1,8 +1,10 @@
-import { clamp, digitsOf, INK, Rect, serif, TILE } from './constants';
+import { clamp, pal, Rect, TILE } from './constants';
+import { drawQ, drawRich, qWidth } from './draw';
+import { Q } from './num';
 import { groundAt, moveBody, type Body } from './physics';
 import type { Room } from './room';
 
-export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'bound' | 'gate' | 'door';
+export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'orbiter' | 'bound' | 'gate' | 'door';
 
 export interface World {
   room: Room;
@@ -19,25 +21,33 @@ export class Enemy implements Body {
   vx = 0;
   vy = 0;
   onGround = false;
-  n: number;
+  n: Q;
+  /** How the number first shows itself, e.g. "2^5". Lost at the first wound. */
+  label: string | null = null;
+  /** For doors: what is written on them, e.g. "2x + 5 = 1". */
+  sign: string | null = null;
+  /** For doors in the plane: opened by standing at points, not by a number. */
+  needsPoints = false;
   dead = false;
   t = Math.random() * 10;
   dir: 1 | -1 = -1;
   hurtT = 0;
   popT = 0;
   stunT = 0;
+  turnT = 0;
   private hopT = 1 + Math.random();
   private fireT = 1.5 + Math.random();
   chargeT = 0;
   homeX = 0;
   homeY = 0;
+  orbitA = Math.random() * Math.PI * 2;
   /** Tiles occupied by a gate or door. */
   tiles: [number, number][] = [];
   appear = 0;
 
   constructor(
     readonly kind: EnemyKind,
-    n: number,
+    n: Q,
     readonly key: string,
   ) {
     this.n = n;
@@ -53,6 +63,9 @@ export class Enemy implements Body {
   get harmful(): boolean {
     return !this.solid && this.appear >= 1;
   }
+  get negative(): boolean {
+    return this.n.sign < 0;
+  }
   get cx(): number {
     return this.x + this.w / 2;
   }
@@ -60,15 +73,21 @@ export class Enemy implements Body {
     return this.y + this.h / 2;
   }
 
+  private get shown(): string {
+    return this.label ?? this.n.toString();
+  }
+
   resize(): void {
-    const d = digitsOf(this.n);
+    const len = Math.min(6, this.shown.replace(/[\^/]/g, '').length);
+    const frac = !this.label && this.n.d !== 1;
+    const d = frac ? Math.max(1, len - 1) * 0.6 : len;
     const cx = this.x + this.w / 2;
     const bottom = this.y + this.h;
     if (this.kind === 'walker') {
       this.w = 12 + 10 * d;
-      this.h = 26;
-    } else if (this.kind === 'drifter') {
-      this.w = this.h = 22 + 8 * d;
+      this.h = frac ? 34 : 26;
+    } else if (this.kind === 'drifter' || this.kind === 'orbiter') {
+      this.w = this.h = 24 + 8 * d;
     } else if (this.kind === 'emitter') {
       this.w = this.h = 30 + 6 * d;
     } else if (this.kind === 'bound') {
@@ -76,17 +95,18 @@ export class Enemy implements Body {
       this.h = 32;
     } else return;
     this.x = cx - this.w / 2;
-    this.y = this.kind === 'drifter' || this.kind === 'emitter' ? this.y : bottom - this.h;
+    if (this.kind === 'walker' || this.kind === 'bound') this.y = bottom - this.h;
   }
 
   hitbox(): Rect {
-    const inset = this.kind === 'drifter' || this.kind === 'emitter' ? 4 : 2;
+    const inset = this.kind === 'drifter' || this.kind === 'emitter' || this.kind === 'orbiter' ? 4 : 2;
     return { x: this.x + inset, y: this.y + inset, w: this.w - inset * 2, h: this.h - inset * 2 };
   }
 
+  /** Knocked back by a blow; negative numbers are pulled toward it instead. */
   knock(fromX: number, power: number): void {
-    if (this.solid || this.kind === 'emitter') return;
-    const s = Math.sign(this.cx - fromX) || 1;
+    if (this.solid || this.kind === 'emitter' || this.kind === 'orbiter') return;
+    const s = (Math.sign(this.cx - fromX) || 1) * (this.negative ? -0.6 : 1);
     if (this.kind === 'drifter') {
       this.vx = s * power * 1.3;
       this.vy = -power * 0.3;
@@ -101,16 +121,18 @@ export class Enemy implements Body {
     this.t += dt;
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.popT = Math.max(0, this.popT - dt * 4);
+    this.turnT = Math.max(0, this.turnT - dt * 2);
     this.stunT = Math.max(0, this.stunT - dt);
     this.appear = Math.min(1, this.appear + dt * 2.5);
     const dx = w.px - this.cx;
     const dy = w.py - this.cy;
+    const haste = this.negative ? 1.2 : 1;
 
     switch (this.kind) {
       case 'walker':
       case 'bound': {
         const near = Math.abs(dx) < 280 && Math.abs(dy) < 110;
-        const speed = this.kind === 'bound' ? 26 : near ? 78 : 38;
+        const speed = (this.kind === 'bound' ? 26 : near ? 78 : 38) * haste;
         if (this.stunT <= 0) {
           if (near) this.dir = dx > 0 ? 1 : -1;
           const aheadX = this.dir > 0 ? this.x + this.w + 2 : this.x - 2;
@@ -138,8 +160,8 @@ export class Enemy implements Body {
         let ay = 0;
         if (near) {
           const d = Math.hypot(dx, dy) || 1;
-          ax = (dx / d) * 140;
-          ay = (dy / d) * 140;
+          ax = (dx / d) * 140 * haste;
+          ay = (dy / d) * 140 * haste;
         } else {
           ax = (this.homeX - this.cx) * 1.2;
           ay = (this.homeY - this.cy) * 1.2;
@@ -151,13 +173,20 @@ export class Enemy implements Body {
         this.vx *= drag;
         this.vy *= drag;
         const sp = Math.hypot(this.vx, this.vy);
-        const max = this.stunT > 0 ? 400 : 90;
+        const max = this.stunT > 0 ? 400 : 90 * haste;
         if (sp > max) {
           this.vx *= max / sp;
           this.vy *= max / sp;
         }
         this.x = clamp(this.x + this.vx * dt, 0, w.room.pw - this.w);
         this.y = clamp(this.y + this.vy * dt, 0, w.room.ph - this.h);
+        break;
+      }
+      case 'orbiter': {
+        // goes around its centre forever, at radius 2 tiles
+        this.orbitA += dt * 1.1 * (this.negative ? -1 : 1);
+        this.x = this.homeX + Math.cos(this.orbitA) * TILE * 2 - this.w / 2;
+        this.y = this.homeY + Math.sin(this.orbitA) * TILE * 2 - this.h / 2;
         break;
       }
       case 'emitter': {
@@ -186,10 +215,9 @@ export class Enemy implements Body {
     const a = this.appear;
     const flash = this.hurtT > 0;
     ctx.globalAlpha = a;
-    ctx.strokeStyle = INK;
-    ctx.fillStyle = INK;
+    ctx.strokeStyle = pal.ink;
+    ctx.fillStyle = pal.ink;
     ctx.lineWidth = 1.5;
-    const s = String(this.n);
     const cx = this.cx;
     const cy = this.cy;
 
@@ -205,10 +233,10 @@ export class Enemy implements Body {
         ctx.stroke();
       }
       ctx.globalAlpha = a;
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = pal.void;
       ctx.fillRect(cx - 24, cy - 20, 48, 40);
-      ctx.fillStyle = INK;
-      this.glyph(ctx, s, cx, cy, 40 + this.popT * 14, flash);
+      ctx.fillStyle = pal.ink;
+      drawQ(ctx, this.n, cx, cy, 40 + this.popT * 14, 600);
       ctx.globalAlpha = 1;
       return;
     }
@@ -222,23 +250,30 @@ export class Enemy implements Body {
       ctx.lineTo(cx + gap, this.y + this.h);
       ctx.stroke();
       ctx.globalAlpha = a * (0.55 + 0.25 * Math.sin(this.t * 1.5));
-      ctx.font = serif(22);
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(s, cx, this.y - 14);
+      if (this.sign) drawRich(ctx, this.sign, cx, this.y - 16, 21);
+      else drawQ(ctx, this.n, cx, this.y - 16, 22);
       ctx.globalAlpha = 1;
       return;
     }
 
-    const squash = this.kind === 'walker' ? 1 + Math.max(0, Math.min(0.15, -this.vy / 2400)) : 1;
-    let size = this.kind === 'emitter' ? 26 : this.kind === 'drifter' ? 30 : 32;
+    let size = this.kind === 'emitter' ? 26 : this.kind === 'drifter' || this.kind === 'orbiter' ? 30 : 32;
     size += this.popT * 12;
+    const by = this.kind === 'walker' || this.kind === 'bound' ? this.y + this.h - (this.n.d !== 1 && !this.label ? 17 : 13) : cy;
+    const glyph = (x: number, y: number) => {
+      if (this.label) drawRich(ctx, this.label, x, y, size, { weight: 600 });
+      else drawQ(ctx, this.n, x, y, size, 600);
+    };
 
-    if (this.kind === 'drifter') {
-      ctx.globalAlpha = a * 0.18;
-      this.glyph(ctx, s, cx - this.vx * 0.12, cy - this.vy * 0.12, size, false);
-      ctx.globalAlpha = a * 0.08;
-      this.glyph(ctx, s, cx - this.vx * 0.24, cy - this.vy * 0.24, size, false);
+    if (this.kind === 'orbiter') {
+      ctx.globalAlpha = a * 0.12;
+      ctx.beginPath();
+      ctx.arc(this.homeX, this.homeY, TILE * 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = a;
+    }
+    if (this.kind === 'drifter' || this.kind === 'orbiter') {
+      ctx.globalAlpha = a * 0.15;
+      glyph(cx - this.vx * 0.12, cy - this.vy * 0.12);
       ctx.globalAlpha = a;
     }
     if (this.kind === 'emitter') {
@@ -283,12 +318,31 @@ export class Enemy implements Body {
       ctx.stroke();
       ctx.lineWidth = 1.5;
     }
-    const by = this.kind === 'walker' || this.kind === 'bound' ? this.y + this.h - 13 : cy;
-    ctx.save();
-    ctx.translate(cx, by);
-    ctx.scale(1 / squash, squash);
-    this.glyph(ctx, s, 0, 0, size, flash);
-    ctx.restore();
+
+    if (this.negative) {
+      // a negative number is drawn as a photographic negative of itself
+      const w = (this.label ? 20 : qWidth(ctx, this.n, size, 600)) + 16;
+      const h = size * (this.n.d !== 1 ? 1.5 : 1.05);
+      ctx.beginPath();
+      ctx.ellipse(cx, by, w / 2 + 2, h / 2 + 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = pal.void;
+    }
+    if (flash) {
+      ctx.globalAlpha = a * 0.55;
+      glyph(cx + 1.5, by);
+      glyph(cx - 1.5, by);
+      ctx.globalAlpha = a;
+    }
+    glyph(cx, by);
+    ctx.fillStyle = pal.ink;
+    if (this.turnT > 0) {
+      // the moment of crossing zero
+      ctx.globalAlpha = this.turnT;
+      ctx.beginPath();
+      ctx.arc(cx, by, 20 + (1 - this.turnT) * 40, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     if ((this.kind === 'walker' || this.kind === 'bound') && this.onGround) {
       ctx.globalAlpha = a * 0.3;
       ctx.beginPath();
@@ -297,20 +351,6 @@ export class Enemy implements Body {
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-  }
-
-  private glyph(ctx: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, flash: boolean): void {
-    ctx.font = serif(size, { weight: 600 });
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    if (flash) {
-      ctx.save();
-      ctx.globalAlpha *= 0.5;
-      ctx.lineWidth = 6;
-      ctx.strokeText(s, x, y);
-      ctx.restore();
-    }
-    ctx.fillText(s, x, y);
   }
 }
 
@@ -324,19 +364,21 @@ export interface Shot {
   dead: boolean;
 }
 
-export function makeEnemy(kind: EnemyKind, n: number, key: string, tx: number, ty: number): Enemy {
+export function makeEnemy(kind: EnemyKind, n: Q, key: string, tx: number, ty: number, label: string | null = null): Enemy {
   const e = new Enemy(kind, n, key);
+  e.label = label;
+  e.resize();
   const footX = tx * TILE + TILE / 2;
   const footY = (ty + 1) * TILE;
-  if (kind === 'drifter' || kind === 'emitter') {
+  if (kind === 'drifter' || kind === 'emitter' || kind === 'orbiter') {
     e.x = footX - e.w / 2;
     e.y = ty * TILE + TILE / 2 - e.h / 2;
   } else {
     e.x = footX - e.w / 2;
     e.y = footY - e.h;
   }
-  e.homeX = e.cx;
-  e.homeY = e.cy;
+  e.homeX = kind === 'orbiter' ? footX : e.cx;
+  e.homeY = kind === 'orbiter' ? ty * TILE + TILE / 2 : e.cy;
   e.dir = Math.random() < 0.5 ? 1 : -1;
   return e;
 }

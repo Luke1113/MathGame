@@ -19,11 +19,12 @@ interface NoiseOpts {
   sweepTo?: number;
 }
 
-type DroneKind = 'room' | 'boss' | 'none';
+type DroneKind = 'room' | 'boss' | 'room2' | 'boss2' | 'none';
 
 /** Map a natural number to a pitch from the harmonic series, folded into one octave. */
 export function pitchOf(v: number): number {
-  if (v <= 0) return 110;
+  if (v < 0) return pitchOf(-v) / 2;
+  if (v === 0) return 110;
   const oct = Math.pow(2, Math.floor(Math.log2(v)));
   return 220 * (v / oct);
 }
@@ -160,17 +161,19 @@ export class Sound {
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(kind === 'boss' ? 0.16 : 0.11, now + 3);
+    const boss = kind === 'boss' || kind === 'boss2';
+    gain.gain.linearRampToValueAtTime(boss ? 0.16 : 0.11, now + 3);
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = kind === 'boss' ? 520 : 380;
+    lp.frequency.value = boss ? 520 : 380;
     lp.Q.value = 4;
     lp.connect(gain);
     this.out(gain, 0.4);
 
-    const base = kind === 'boss' ? 41.2 : 55;
+    // the other side of zero hums a minor third higher, uneasy
+    const base = { room: 55, boss: 41.2, room2: 65.4, boss2: 49, none: 55 }[kind];
     const nodes: AudioScheduledSourceNode[] = [];
-    const ratios = kind === 'boss' ? [1, 1.498, 2.01, 1.06] : [1, 1.5, 2.003];
+    const ratios = { room: [1, 1.5, 2.003], boss: [1, 1.498, 2.01, 1.06], room2: [1, 1.189, 1.5, 2.002], boss2: [1, 1.189, 1.414, 2.01], none: [1] }[kind];
     for (const r of ratios) {
       const o = ctx.createOscillator();
       o.type = r === 1 ? 'sine' : 'triangle';
@@ -183,9 +186,9 @@ export class Sound {
       nodes.push(o);
     }
     const lfo = ctx.createOscillator();
-    lfo.frequency.value = kind === 'boss' ? 0.5 : 0.07;
+    lfo.frequency.value = boss ? 0.5 : 0.07;
     const lfoGain = ctx.createGain();
-    lfoGain.gain.value = kind === 'boss' ? 260 : 160;
+    lfoGain.gain.value = boss ? 260 : 160;
     lfo.connect(lfoGain).connect(lp.frequency);
     lfo.start(now);
     nodes.push(lfo);
@@ -268,6 +271,14 @@ export class Sound {
   heartbeat(): void {
     this.tone(48, 0.35, { vol: 0.35, glideTo: 36, wet: 0.2 });
     this.tone(46, 0.35, { vol: 0.25, glideTo: 34, wet: 0.2, delay: 0.22 });
+  }
+  /** A number crosses zero and becomes its own opposite. */
+  turn(): void {
+    this.tone(330, 0.5, { vol: 0.12, glideTo: 165, wet: 0.5 });
+    this.tone(495, 0.5, { vol: 0.06, glideTo: 990, wet: 0.5 });
+  }
+  point(): void {
+    this.bell(523.25, 0.1, 2.5);
   }
   resolve(): void {
     const f = [110, 165, 220, 277.18, 330, 440];

@@ -1,4 +1,4 @@
-// Bundles the built game into one self-contained HTML file: dist/x-chapter-1.html
+// Bundles the built game into one self-contained HTML file: dist/x.html
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const html = readFileSync('dist/index.html', 'utf8');
@@ -9,5 +9,5 @@ const out = html.replace(/<script type="module" crossorigin src="\.\/(assets\/[^
   return `<script type="module">${code}</script>`;
 });
 if (inlined === 0) throw new Error('no module script found to inline');
-writeFileSync('dist/x-chapter-1.html', out);
-console.log(`dist/x-chapter-1.html (${(out.length / 1024).toFixed(1)} kB)`);
+writeFileSync('dist/x.html', out);
+console.log(`dist/x.html (${(out.length / 1024).toFixed(1)} kB)`);

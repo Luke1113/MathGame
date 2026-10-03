@@ -4,7 +4,12 @@
 
 A minimalist, dramatic action-platformer where mathematics is the combat system. You are **x**, an unknown, drawn into a dark world made of numbers. You fight by holding a number and changing it with arithmetic.
 
-This repository contains the **first prototype: Chapter I — Arithmetic**. It's a complete slice that runs from the opening, through the first boss (Zero), to the end of the chapter.
+The prototype has two chapters, which follow the school curriculum:
+
+- **Chapter I — Arithmetic** (elementary): counting, + − × ÷, divisibility, equality. Boss: Zero.
+- **Chapter II — The Other Side** (middle school): negative numbers, fractions, powers, Pythagoras, the coordinate plane, equations. Drawn in negative, black on white. Boss: π.
+
+Chapter II opens beneath Zero's arena once Zero is beaten. To start there directly, choose **begin at chapter II** on the title screen.
 
 ## Run it
 
@@ -12,7 +17,7 @@ This repository contains the **first prototype: Chapter I — Arithmetic**. It's
 npm install
 npm run dev            # play at http://localhost:5173
 npm run build          # production build in dist/
-npm run build:single   # one self-contained file: dist/x-chapter-1.html
+npm run build:single   # one self-contained file: dist/x.html
 npm run check:rooms    # validate the chapter maps
 ```
 
@@ -22,10 +27,12 @@ npm run check:rooms    # validate the chapter maps
 |---|---|---|
 | move / aim | `A` `D` / `W` `S` | |
 | jump · drop through | `Space` · `S`+`Space` | |
-| dash | `Tab` | |
+| dash (with √2: hold a direction, including up) | `Tab` | |
 | strike | `J` | `Num 0` |
 | hold a digit | `1`–`9` | `1`–`9` |
 | `+` `−` `×` `÷`, then a digit | type `+` `-` `*` `/` (Shift as needed), or `U` `I` `O` `P` | `+` `−` `*` `/` |
+| `^`, then a digit | type `^`, or `K` | |
+| the opposite of x | `-` then `-` | `−` then `−` |
 | equate | `Enter` or `=` | `Enter` |
 | slow time | `L` | `Num .` |
 | pause / controls | `Esc` | |
@@ -40,6 +47,14 @@ npm run check:rooms    # validate the chapter maps
 - **Doors** open to their own number: strike one while holding exactly that number, or equate beside it.
 - **Lamps** save your progress and restore you.
 
+## The rules of Chapter II
+
+- **Past zero, numbers turn.** Taking more than there is carries an enemy through zero and it becomes negative. A negative enemy grows when struck with a positive x; hold a negative x to undo it.
+- **Fractions are exact.** `3 ÷ 4` makes x = 3/4, and a 3/4 enemy falls to it in one strike.
+- **Powers:** `2 ^ 6` makes 64, the same number as the enemy written `4³`.
+- **The plane:** a door names coordinates; stand on those points.
+- **The unknown:** an equation door opens to its solution.
+
 ## Code map
 
 | File | Role |
@@ -48,7 +63,11 @@ npm run check:rooms    # validate the chapter maps
 | `src/game.ts` | Game states, the number rules, room loading, rendering, HUD |
 | `src/player.ts` | Movement, dash, strikes, and drawing the stick figure |
 | `src/enemies.ts` | Walkers, drifters, emitters, the bound, gates, doors |
-| `src/boss.ts` | Zero, the Chapter I boss |
+| `src/rooms2.ts` | Chapter II maps |
+| `src/num.ts` | Exact numbers: fractions, and π |
+| `src/draw.ts` | Stacked fractions and superscripts |
+| `src/boss.ts` | The boss interface, and Zero (Chapter I) |
+| `src/pi.ts` | π (Chapter II) |
 | `src/audio.ts` | Synthesized sound (Web Audio); no audio files |
 | `src/room.ts`, `src/physics.ts` | Tile collision and terrain outlines |
 

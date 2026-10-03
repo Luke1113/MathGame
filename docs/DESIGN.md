@@ -64,16 +64,20 @@ Counting, + − × ÷, natural numbers, divisibility, equality.
 - **Boss — Zero, "the number that cannot be lessened."** Every strike is refused (`n > 0`). Zero swallows numbers to become vulnerable (12, then 24, then 36). Each time you bring it exactly back to nothing, it cracks. At the end its pulse makes x = 0, and the only move left is to **equate**: `0 = 0`. You receive the digit 0.
 - Ending: "Past nothing, the line goes on — into numbers less than nothing."
 
-### Chapter II — The Other Side *(middle school)*
+### Chapter II — The Other Side *(middle school)* — **playable**
 
-Negative numbers, integers, fractions and ratios, variables and linear equations, exponents, the coordinate plane, Pythagoras, π and circles.
+Negative numbers, fractions, powers, Pythagoras, the coordinate plane, linear equations, π.
 
-- **Negatives:** overkill no longer fails. It produces negative enemies, which pull instead of push. The number line has a second side, and the world mirrors across 0.
-- **Fractions:** fraction enemies ride a denominator. Kill the denominator and the result is a division-by-zero explosion.
-- **Variables:** enemies marked `2y + 3`, where y changes with a room-wide value.
-- **Coordinate plane:** rooms with axes as walls. Your position becomes a coordinate pair.
-- **First functions:** `y = ax` (a beam) and `y = ax²` (a lob), with x as the parameter.
-- **Boss — π.** Circular attacks whose sequence follows the digits of π (3, 1, 4, 1, 5, 9…), so players who know the digits can predict the fight.
+Below zero, **the world is drawn in negative**: black ink on white. Negative numbers inside it are drawn as photographic negatives of themselves.
+
+- Rooms: *the other side → reflection (hub) → the broken → growth → the diagonal → the plane → the unknown → circumference → π*
+- **± — the opposite.** The floor under x is gone. A strike that takes more than there is carries the enemy *through* zero, and it turns negative (it is then pulled toward blows rather than pushed). Positive x makes a negative enemy *more* negative, so it must be undone with a negative x, because taking away less than nothing gives more. `−` pressed twice negates x.
+- **/ — a part.** Division no longer has to come out even: `3 ÷ 4` makes x = 3/4. Fraction enemies, and fractions drawn stacked as they are by hand. All arithmetic is exact (rational numbers).
+- **^ — power.** `2 ^ 6` makes 64. Enemies first show themselves in power form (`4³`, `2⁶`); equal forms fall to the same equate.
+- **√2 — the diagonal.** The dash follows the held direction, upward and diagonally, which opens a shaft in the hub that a jump alone can't reach.
+- **The plane.** A room with coordinate axes, ticks and labels. A door names two points; it opens when x has stood on both.
+- **The unknown.** Equation doors: `x + 9 = 4`, `3x + 1 = 3`, `2^x = 64`. Hold the solution (−5, 2/3, 6) and strike or equate. Before the boss, `7x = 22` asks for Archimedes' 22/7.
+- **Boss: π, "the number that never ends."** Its digits circle it. Its volleys follow π's digits in order (3 shots, then 1, then 4, 1, 5, 9…), and the next digit is shown before it fires. It rolls across the floor as a wheel, measuring the floor in circumferences, and sweeps the room with radii that only a dash passes through. When weak, it pretends to be a fraction: the old measurements of π (Babylon's 25/8, Egypt's 256/81, Archimedes' 22/7), each to be brought exactly to zero. After the third, its circle unrolls into a line π long, which x takes up: **x = π**, and equating ends it (π = π).
 
 ### Chapter III — Functions *(high school)*
 

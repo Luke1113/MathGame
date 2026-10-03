@@ -1,4 +1,6 @@
-import { clamp, digitsOf, INK, Rect, serif } from './constants';
+import { clamp, pal, Rect } from './constants';
+import { drawQ } from './draw';
+import type { Q } from './num';
 import type { Input } from './input';
 import { moveBody, type Body } from './physics';
 import type { Room } from './room';
@@ -39,6 +41,11 @@ export class Player implements Body {
   dashT = 0;
   private dashCd = 0;
   private airDash = true;
+  /** Direction of the current dash (unit vector). */
+  private dashX = 1;
+  private dashY = 0;
+  /** After learning √2, dashes follow the held direction, upward and diagonally too. */
+  canDiag = false;
   wantStrike = false;
   wantDash = false;
 
@@ -52,7 +59,7 @@ export class Player implements Body {
   maxHp = 5;
   invuln = 0;
   /** x itself: the number held. null until the first glyph is found. */
-  value: number | null = null;
+  value: Q | null = null;
   valuePop = 0;
 
   private runPhase = 0;
@@ -78,12 +85,19 @@ export class Player implements Body {
     this.jumpBuf = 0.13;
   }
 
+  /** Stop a dash short, e.g. when it carries x through a doorway. */
+  endDash(): void {
+    this.dashT = 0;
+  }
+
   get dashing(): boolean {
     return this.dashT > 0;
   }
 
+  /** Longer numbers make longer weapons. */
   reach(): number {
-    return 34 + 9 * digitsOf(this.value ?? 0);
+    const len = this.value ? Math.min(5, this.value.toString().replace('−', '').length) : 1;
+    return 34 + 9 * len;
   }
 
   update(dt: number, input: Input, room: Room, sfx: Sound): void {
@@ -104,19 +118,28 @@ export class Player implements Body {
     // dash
     if (this.wantDash && this.dashCd <= 0 && (this.onGround || this.airDash)) {
       if (!this.onGround) this.airDash = false;
+      let dx = dir;
+      let dy = this.canDiag ? (input.down('down') ? 1 : 0) - (input.down('up') ? 1 : 0) : 0;
+      if (dx === 0 && dy === 0) dx = this.facing;
+      if (dy > 0 && this.onGround) dy = 0;
+      const len = Math.hypot(dx, dy);
+      this.dashX = dx / len;
+      this.dashY = dy / len;
       this.dashT = DASH_T;
       this.dashCd = DASH_CD;
-      this.vx = DASH_V * this.facing;
-      this.vy = 0;
+      this.jumpHeld = false;
       sfx.dash();
     }
     this.wantDash = false;
 
     if (this.dashT > 0) {
       this.dashT -= dt;
-      this.vx = DASH_V * this.facing;
-      this.vy = 0;
-      if (this.dashT <= 0) this.vx = RUN * this.facing;
+      this.vx = DASH_V * this.dashX;
+      this.vy = DASH_V * this.dashY;
+      if (this.dashT <= 0) {
+        this.vx = RUN * this.dashX;
+        this.vy = this.dashY < 0 ? DASH_V * this.dashY * 0.35 : 0;
+      }
     } else {
       // run
       const accel = this.onGround ? ACCEL_GROUND : ACCEL_AIR;
@@ -215,7 +238,7 @@ export class Player implements Body {
   private drawFigure(ctx: CanvasRenderingContext2D, x: number, y: number, facing: number, t: number, ghost: boolean): void {
     const cx = x + this.w / 2;
     const dashing = this.dashT > 0;
-    const lean = dashing ? facing * 7 : clamp(this.vx / RUN, -1, 1) * 2.5;
+    const lean = dashing ? this.dashX * 7 : clamp(this.vx / RUN, -1, 1) * 2.5;
     const breathe = this.stillT > 0 ? Math.sin(t * 2.2) * 0.6 : 0;
     const headX = cx + lean;
     const headY = y + 6 + breathe * 0.5;
@@ -225,7 +248,7 @@ export class Player implements Body {
     const hipY = y + 20;
     const feetY = y + this.h;
 
-    ctx.strokeStyle = INK;
+    ctx.strokeStyle = pal.ink;
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -320,21 +343,18 @@ export class Player implements Body {
     }
 
     // the held glyph
-    const s = String(this.value);
-    const size = 17 + Math.min(6, digitsOf(this.value) * 2) + this.valuePop * 10;
+    const len = this.value.toString().length;
+    const size = 17 + Math.min(6, len * 2) + this.valuePop * 10;
     let gx: number;
     let gy: number;
     if (p >= 0 && p < 1) {
       gx = shX + Math.cos(armA) * r * 0.62;
       gy = shY + Math.sin(armA) * r * 0.62;
     } else {
-      gx = handX + facing * (6 + s.length * 3);
+      gx = handX + facing * (6 + Math.min(len, 5) * 3);
       gy = handY - 5 + Math.sin(t * 2.5) * 1.2;
     }
-    ctx.fillStyle = INK;
-    ctx.font = serif(size);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(s, gx, gy);
+    ctx.fillStyle = pal.ink;
+    drawQ(ctx, this.value, gx, gy, size);
   }
 }

@@ -7,21 +7,28 @@ export interface SaveData {
   opened: string[];
   /** Shrines already taken, as "room:key". */
   taken: string[];
-  bossDone: boolean;
+  /** Bosses resolved, by room id. */
+  bosses: string[];
+  /** Chapter cards already shown. */
+  chapters: number[];
 }
 
 const KEY = 'mathgame.save.v1';
 
 export function freshSave(): SaveData {
-  return { has: [], lamp: null, opened: [], taken: [], bossDone: false };
+  return { has: [], lamp: null, opened: [], taken: [], bosses: [], chapters: [] };
 }
 
 export function loadSave(): SaveData | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    const d = JSON.parse(raw) as Partial<SaveData>;
-    return { ...freshSave(), ...d };
+    const d = JSON.parse(raw) as Partial<SaveData> & { bossDone?: boolean };
+    const save = { ...freshSave(), ...d };
+    // saves from the first prototype recorded only Zero
+    if (d.bossDone && !save.bosses.includes('zero')) save.bosses.push('zero');
+    delete (save as { bossDone?: boolean }).bossDone;
+    return save;
   } catch {
     return null;
   }

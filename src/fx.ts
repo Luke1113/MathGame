@@ -1,4 +1,4 @@
-import { INK, serif } from './constants';
+import { pal, serif } from './constants';
 
 interface Particle {
   x: number;
@@ -102,8 +102,8 @@ export class Fx {
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = INK;
-    ctx.strokeStyle = INK;
+    ctx.fillStyle = pal.ink;
+    ctx.strokeStyle = pal.ink;
     for (const p of this.ps) {
       const a = Math.max(0, p.life / p.max);
       ctx.globalAlpha = a;
@@ -138,7 +138,7 @@ export class Dust {
   }
 
   draw(ctx: CanvasRenderingContext2D, camX: number, camY: number, vw: number, vh: number, t: number): void {
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     for (const m of this.motes) {
       const px = ((((m.x * vw * 1.4 - camX * m.z * 0.6 + t * 6 * m.z) % (vw * 1.4)) + vw * 1.4) % (vw * 1.4)) - vw * 0.2;
       const py = ((((m.y * vh * 1.4 - camY * m.z * 0.6 - t * 3 * m.z + Math.sin(t * 0.3 + m.ph) * 8) % (vh * 1.4)) + vh * 1.4) % (vh * 1.4)) - vh * 0.2;

@@ -1,5 +1,6 @@
 /**
- * Chapter I — Arithmetic.
+ * The world's maps, chapter by chapter. Chapter I — Arithmetic — is here;
+ * Chapter II — The Other Side — is in rooms2.ts.
  *
  * Map legend
  *   #  solid            .  empty            -  one-way platform
@@ -8,16 +9,30 @@
  *   a–z  entities, defined per room in `legend`
  */
 
+import { CHAPTER_TWO } from './rooms2';
+
+/** A number as written in a map: a whole number, or [numerator, denominator]. */
+export type NumSpec = number | [number, number];
+
 export type EntitySpec =
-  | { k: 'walker'; n: number }
-  | { k: 'drifter'; n: number }
-  | { k: 'emitter'; n: number }
+  /** `label` shows a number in another form until first struck, e.g. "2^5" for 32. */
+  | { k: 'walker'; n: NumSpec; label?: string }
+  | { k: 'drifter'; n: NumSpec; label?: string }
+  | { k: 'emitter'; n: NumSpec }
+  | { k: 'orbiter'; n: NumSpec }
   | { k: 'bound'; n: number }
   | { k: 'gate'; n: number; w: number; h: number }
-  | { k: 'door'; n: number; h: number }
+  /** A door opens to its number. `sign` is what is written on it, if not the number itself. */
+  | { k: 'door'; n: NumSpec; h: number; sign?: string }
+  /** A door in the plane that opens when x has stood at every point in the room. */
+  | { k: 'pointdoor'; h: number; sign: string }
+  /** A point of the plane, at coordinates (a, b) of the room's axes. */
+  | { k: 'point'; a: number; b: number }
+  /** Solid floor that opens once the named boss is resolved. */
+  | { k: 'seal'; w: number; h: number; until: string }
   | { k: 'shrine'; give: string }
   | { k: 'text'; s: string }
-  | { k: 'boss' };
+  | { k: 'boss'; which: 'zero' | 'pi' };
 
 export interface RoomDef {
   id: string;
@@ -25,9 +40,15 @@ export interface RoomDef {
   map: string[];
   legend: Record<string, EntitySpec>;
   dark?: number;
+  /** 1 by default. Chapter II is drawn in negative. */
+  chapter?: number;
+  /** Tile corner where a room's coordinate axes cross. */
+  axes?: { ox: number; oy: number };
+  /** Some places here are reached only with the upward dash (√2). */
+  dash?: boolean;
 }
 
-export const ROOMS: RoomDef[] = [
+const CHAPTER_ONE: RoomDef[] = [
   {
     id: 'void',
     name: 'nothing',
@@ -327,7 +348,8 @@ export const ROOMS: RoomDef[] = [
     name: '',
     dark: 0.72,
     legend: {
-      z: { k: 'boss' },
+      z: { k: 'boss', which: 'zero' },
+      s: { k: 'seal', w: 2, h: 3, until: 'zero' },
     },
     map: [
       '##############################',
@@ -344,12 +366,14 @@ export const ROOMS: RoomDef[] = [
       'I............................#',
       'I............................#',
       'I............................#',
-      '##############################',
-      '##############################',
-      '##############################',
+      '##############s.##############',
+      '##############..##############',
+      '##############JJ##############',
     ],
   },
 ];
+
+export const ROOMS: RoomDef[] = [...CHAPTER_ONE, ...CHAPTER_TWO];
 
 export const ROOM_BY_ID: Record<string, RoomDef> = Object.fromEntries(ROOMS.map((r) => [r.id, r]));
 
@@ -391,6 +415,31 @@ export const GLYPHS: Record<string, GlyphInfo> = {
     hint: 'Enter or =  —  equate.   All that equals x is undone.\nA door opens to its own number: strike it, or equate beside it.',
   },
   '0': { name: 'zero', line: 'Nothing. Hold it close.' },
+  '±': {
+    name: 'the opposite',
+    line: 'Every number has its reflection.',
+    hint: 'Strikes may now pass through zero: what is taken past nothing turns negative.\n− then − again  —  turn x into its opposite',
+  },
+  '/': {
+    name: 'a part',
+    line: 'Not everything is whole.',
+    hint: '÷ no longer needs to come out even:  3 ÷ 4  makes  3/4',
+  },
+  '^': {
+    name: 'power',
+    line: 'Growth, upon growth.',
+    hint: '^ (or K), then a digit  —  raise x to that power:  2 ^ 5  makes  32',
+  },
+  '√2': {
+    name: 'the diagonal',
+    line: 'One across, one up. Between them lies √2.',
+    hint: 'Tab while holding a direction  —  dash that way: up, and on the diagonal',
+  },
+  'π': {
+    name: 'pi',
+    line: 'It never ends. It never repeats.',
+    hint: 'x = π.   Nothing else can equal it.',
+  },
   '2': { name: 'two', line: 'The first of the primes.' },
   '3': { name: 'three', line: 'Three, and the triangle.' },
   '4': { name: 'four', line: 'Four corners of a square.' },

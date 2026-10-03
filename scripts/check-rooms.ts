@@ -1,5 +1,5 @@
 // Validates chapter maps: equal row widths, exits paired between rooms, legend coverage.
-import { ROOMS } from '../src/rooms.ts';
+import { ROOMS } from '../src/rooms';
 
 let ok = true;
 const fail = (m: string) => { ok = false; console.error('✗ ' + m); };
@@ -34,9 +34,12 @@ for (const [letter, list] of exits) {
 // ——— reachability: can every pickup and exit be reached with run, jump and dash?
 // A jump rises about 3.9 tiles, so a ledge 3 rows up is reachable and 4 rows up is not.
 const JUMP_ROWS = 3;
+/** With the upward dash (√2), a jump climbs about 7 tiles. */
+const DASH_ROWS = 6;
 /** How many columns a jump can carry you, by rows climbed (from a running start). */
 const JUMP_SPAN = [6, 5, 5, 4];
 for (const r of ROOMS) {
+  const climb = r.dash ? DASH_ROWS : JUMP_ROWS;
   const w = r.map[0].length;
   const h = r.map.length;
   const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? '.' : r.map[y][x]);
@@ -71,9 +74,10 @@ for (const r of ROOMS) {
     const [x, y] = queue.shift()!;
     for (const dx of [-1, 1]) if (!solid(x + dx, y)) push(fall(x + dx, y));
     if (at(x, y + 1) === '-') push(fall(x, y + 2));
-    for (let dy = 1; dy <= JUMP_ROWS; dy++) {
+    for (let dy = 1; dy <= climb; dy++) {
       if (solid(x, y - dy)) break;
-      for (let dx = -JUMP_SPAN[dy]; dx <= JUMP_SPAN[dy]; dx++) {
+      const span = JUMP_SPAN[Math.min(dy, JUMP_SPAN.length - 1)];
+      for (let dx = -span; dx <= span; dx++) {
         const tx = x + dx;
         const ty = y - dy;
         let clear = true;
@@ -91,7 +95,7 @@ for (const r of ROOMS) {
       if (/[A-Z]/.test(c)) {
         const reach =
           y === h - 1 ? seen.has(`${x},${y - 1}`) || fall(x, y - 1) === null
-          : y === 0 ? [1, 2, 3, 4].some((d) => seen.has(`${x},${d}`))
+          : y === 0 ? [...seen].some((k) => { const [sx, sy] = k.split(',').map(Number); return sy <= climb && Math.abs(sx - x) <= 2; })
           : seen.has(`${x},${y}`) || [...seen].some((k) => k === `${x},${y + 1}` || k === `${x},${y + 2}`);
         if (!reach && (x === 0 || x === w - 1 ? floor(x, y + 1) : true)) fail(`${r.id}: exit ${c} at (${x},${y}) cannot be reached`);
       }

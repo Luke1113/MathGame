@@ -1,9 +1,12 @@
 import { Sound } from './audio';
-import { Zero, type BossHost } from './boss';
-import { AIR, clamp, damp, INK, overlaps, rectCircle, serif, TILE, VIEW_H, VIEW_W } from './constants';
+import { Zero, type Boss, type BossHost } from './boss';
+import { clamp, damp, overlaps, pal, rectCircle, serif, setPalette, TILE, VIEW_H, VIEW_W } from './constants';
+import { drawQ, drawRich, qWidth } from './draw';
 import { Enemy, makeEnemy, type Shot, type World } from './enemies';
 import { Dust, Fx } from './fx';
 import { Input, type Ev, type Op } from './input';
+import { Q } from './num';
+import { Pi } from './pi';
 import { Player } from './player';
 import { Room, SOLID, EMPTY, type Side } from './room';
 import { GLYPHS, ROOMS, ROOM_BY_ID } from './rooms';
@@ -39,9 +42,54 @@ interface Mote {
   dead: boolean;
 }
 
+interface Point {
+  a: number;
+  b: number;
+  x: number;
+  y: number;
+  lit: boolean;
+  t: number;
+}
+
+interface Seal {
+  until: string;
+  tiles: [number, number][];
+}
+
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
-const OPS = ['+', '−', '×', '÷', '='];
-const FLOOR_ZERO = 14 * TILE;
+const OPS_ONE = ['+', '−', '×', '÷', '='];
+const OPS_TWO = ['±', '/', '^', '√2'];
+const CHAPTER_ONE_GLYPHS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '+', '−', '×', '÷', '='];
+const FLOOR_Y = 14 * TILE;
+
+const CHAPTERS: Record<number, { numeral: string; name: string; sub: string }> = {
+  1: { numeral: 'I', name: 'ARITHMETIC', sub: 'the first count' },
+  2: { numeral: 'II', name: 'THE OTHER SIDE', sub: 'numbers less than nothing' },
+};
+
+const ENDINGS: Record<number, { glyph: string; line: string; more: string; done: string; next: string; foot: string }> = {
+  1: {
+    glyph: '0',
+    line: 'Nothing. Hold it close.',
+    more: 'Past nothing, the line goes on — into numbers less than nothing.',
+    done: 'I  —  ARITHMETIC',
+    next: 'II  —  THE OTHER SIDE',
+    foot: 'the floor beneath zero has opened',
+  },
+  2: {
+    glyph: 'π',
+    line: 'It never ends. It never repeats.',
+    more: 'Every fraction falls short of it. Only π is equal to π.',
+    done: 'II  —  THE OTHER SIDE',
+    next: 'III  —  FUNCTIONS',
+    foot: 'to be continued',
+  },
+};
+
+const BOSS_TITLES: Record<string, [string, string]> = {
+  zero: ['ZERO', 'the number that cannot be lessened'],
+  pi: ['PI', 'the number that never ends'],
+};
 
 /** Draw text with manual letter spacing, centred on x. */
 function spaced(ctx: CanvasRenderingContext2D, s: string, x: number, y: number, gap: number): void {
@@ -73,7 +121,10 @@ export class Game {
   private texts: Inscription[] = [];
   private lamps: Lamp[] = [];
   private motes: Mote[] = [];
-  private boss: Zero | null = null;
+  private points: Point[] = [];
+  private seals: Seal[] = [];
+  private boss: Boss | null = null;
+  private bossId = '';
   readonly fx = new Fx();
   private dust = new Dust();
 
@@ -95,10 +146,12 @@ export class Game {
   private time = 0;
   private modeT = 0;
   private pickup = '';
+  private chapterNo = 1;
+  private endChapter = 1;
 
   private light: HTMLCanvasElement;
   private lctx: CanvasRenderingContext2D;
-  private vignette: HTMLCanvasElement;
+  private vignettes: { dark: HTMLCanvasElement; light: HTMLCanvasElement };
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -109,15 +162,19 @@ export class Game {
     this.light.width = VIEW_W / 2;
     this.light.height = VIEW_H / 2;
     this.lctx = this.light.getContext('2d')!;
-    this.vignette = document.createElement('canvas');
-    this.vignette.width = VIEW_W;
-    this.vignette.height = VIEW_H;
-    const v = this.vignette.getContext('2d')!;
-    const g = v.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.35, VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.62);
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,0.75)');
-    v.fillStyle = g;
-    v.fillRect(0, 0, VIEW_W, VIEW_H);
+    const vignette = (rgb: string) => {
+      const c = document.createElement('canvas');
+      c.width = VIEW_W;
+      c.height = VIEW_H;
+      const v = c.getContext('2d')!;
+      const g = v.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.35, VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.62);
+      g.addColorStop(0, `rgba(${rgb},0)`);
+      g.addColorStop(1, `rgba(${rgb},0.75)`);
+      v.fillStyle = g;
+      v.fillRect(0, 0, VIEW_W, VIEW_H);
+      return c;
+    };
+    this.vignettes = { dark: vignette('0,0,0'), light: vignette('243,241,235') };
     this.hasSave = loadSave() !== null;
     this.menu = this.hasSave ? 1 : 0;
     this.loadRoom('void');
@@ -131,6 +188,10 @@ export class Game {
     if (!this.has(g)) this.save.has.push(g);
   }
 
+  private get chapter(): number {
+    return this.room.def.chapter ?? 1;
+  }
+
   // ————————————————————————————————————————— rooms
 
   private loadRoom(id: string): void {
@@ -141,10 +202,14 @@ export class Game {
     this.shrines = [];
     this.texts = [];
     this.motes = [];
+    this.points = [];
+    this.seals = [];
     this.boss = null;
+    this.bossId = '';
     this.compose = null;
     this.equateSeq = null;
     this.fx.clear();
+    const axes = def.axes;
     for (const pl of this.room.placed) {
       const s = pl.spec;
       const fx = pl.tx * TILE + TILE / 2;
@@ -153,17 +218,27 @@ export class Game {
         case 'walker':
         case 'drifter':
         case 'emitter':
+        case 'orbiter':
         case 'bound': {
-          const e = makeEnemy(s.k, s.n, pl.key, pl.tx, pl.ty);
+          const label = s.k === 'walker' || s.k === 'drifter' ? (s.label ?? null) : null;
+          const e = makeEnemy(s.k, Q.from(s.n), pl.key, pl.tx, pl.ty, label);
           e.appear = 1;
           this.enemies.push(e);
           break;
         }
         case 'gate':
-        case 'door': {
+        case 'door':
+        case 'pointdoor': {
           if (this.save.opened.includes(pl.key)) break;
-          const e = new Enemy(s.k, s.n, pl.key);
+          const kind = s.k === 'gate' ? 'gate' : 'door';
+          const n = s.k === 'pointdoor' ? Q.ZERO : Q.from(s.n);
+          const e = new Enemy(kind, n, pl.key);
           const w = s.k === 'gate' ? s.w : 1;
+          if (s.k === 'door' && s.sign) e.sign = s.sign;
+          if (s.k === 'pointdoor') {
+            e.sign = s.sign;
+            e.needsPoints = true;
+          }
           e.x = pl.tx * TILE;
           e.y = pl.ty * TILE;
           e.w = w * TILE;
@@ -174,6 +249,17 @@ export class Game {
           this.enemies.push(e);
           break;
         }
+        case 'point':
+          if (axes) this.points.push({ a: s.a, b: s.b, x: (axes.ox + s.a) * TILE, y: (axes.oy - s.b) * TILE, lit: false, t: 0 });
+          break;
+        case 'seal': {
+          if (this.save.bosses.includes(s.until)) break;
+          const tiles: [number, number][] = [];
+          for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) tiles.push([pl.tx + x, pl.ty + y]);
+          for (const [x, y] of tiles) this.room.setTile(x, y, SOLID);
+          this.seals.push({ until: s.until, tiles });
+          break;
+        }
         case 'shrine':
           if (!this.save.taken.includes(pl.key)) this.shrines.push({ key: pl.key, give: s.give, x: fx, y: fy, t: Math.random() * 6 });
           break;
@@ -181,13 +267,15 @@ export class Game {
           this.texts.push({ x: fx, y: pl.ty * TILE + TILE / 2, s: s.s, a: 0 });
           break;
         case 'boss':
-          if (!this.save.bossDone) this.boss = new Zero(this.bossHost(), fx, pl.ty * TILE + TILE / 2);
+          if (this.save.bosses.includes(s.which)) break;
+          this.bossId = s.which;
+          this.boss = s.which === 'zero' ? new Zero(this.bossHost(), fx, pl.ty * TILE + TILE / 2) : new Pi(this.bossHost(), fx, pl.ty * TILE + TILE / 2);
           break;
       }
     }
     this.lamps = this.room.lamps.map((l) => ({ ...l, near: true }));
     this.roomTitle = { s: def.name, t: 0 };
-    this.sfx.setDrone(this.boss ? 'none' : 'room');
+    this.sfx.setDrone(this.boss ? 'none' : this.chapter === 2 ? 'room2' : 'room');
     this.fadeA = 1;
   }
 
@@ -233,18 +321,28 @@ export class Game {
       const rel = p.x - from.cells[0] * TILE;
       p.x = clamp(first * TILE + rel, first * TILE + 1, (last + 1) * TILE - p.w - 1);
       if (side === 'N') {
+        p.endDash();
         p.y = this.room.ph - p.h - 2;
-        p.vy = Math.min(p.vy, -780);
+        p.vy = -780;
       } else p.y = 2;
     }
     this.fadeA = 0.85;
     this.snapCamera();
+    const ch = this.chapter;
+    if (!this.save.chapters.includes(ch)) {
+      // a new chapter announces itself the first time x crosses into it
+      this.save.chapters.push(ch);
+      writeSave(this.save);
+      this.chapterNo = ch;
+      this.setMode('chapter');
+    }
   }
 
   // ————————————————————————————————————————— lifecycle
 
   private newGame(): void {
     this.save = freshSave();
+    this.save.chapters = [1];
     writeSave(this.save);
     this.hasSave = true;
     this.loadRoom('void');
@@ -253,6 +351,34 @@ export class Game {
     this.player.place(sp.x, sp.y);
     this.player.facing = 1;
     this.snapCamera();
+    this.chapterNo = 1;
+    this.setMode('chapter');
+  }
+
+  /** Start at the top of Chapter II, with everything Chapter I teaches. */
+  private chapterTwo(): void {
+    this.save = freshSave();
+    this.save.has = [...CHAPTER_ONE_GLYPHS];
+    this.save.bosses = ['zero'];
+    this.save.chapters = [1, 2];
+    for (const def of ROOMS) {
+      if ((def.chapter ?? 1) !== 1) continue;
+      const room = new Room(def);
+      for (const pl of room.placed) {
+        if (pl.spec.k === 'shrine') this.save.taken.push(pl.key);
+        if (pl.spec.k === 'gate' || pl.spec.k === 'door') this.save.opened.push(pl.key);
+      }
+    }
+    this.loadRoom('below');
+    const lamp = this.room.lamps[0];
+    this.save.lamp = { room: 'below', x: lamp.x, y: lamp.y };
+    writeSave(this.save);
+    this.hasSave = true;
+    this.resetPlayer();
+    const hole = this.room.exitCells('J')!;
+    this.player.place((hole.cells[0] + 1) * TILE, TILE * 2);
+    this.snapCamera();
+    this.chapterNo = 2;
     this.setMode('chapter');
   }
 
@@ -268,7 +394,7 @@ export class Game {
     p.invuln = 0;
     p.vx = p.vy = 0;
     p.strikeT = -1;
-    p.value = this.has('1') ? 1 : null;
+    p.value = this.has('1') ? Q.ONE : null;
   }
 
   private respawn(): void {
@@ -305,6 +431,7 @@ export class Game {
   }
 
   private bossHost(): BossHost {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const g = this;
     return {
       get player() {
@@ -312,9 +439,12 @@ export class Game {
       },
       fx: g.fx,
       sfx: g.sfx,
-      floorY: FLOOR_ZERO,
+      floorY: FLOOR_Y,
       get arenaW() {
         return g.room.pw;
+      },
+      get piOffered() {
+        return g.shrines.some((s) => s.give === 'π');
       },
       shoot: (x, y, vx, vy) => g.shots.push({ x, y, vx, vy, r: 4, life: 5, dead: false }),
       shake: (a) => g.shake(a),
@@ -322,8 +452,8 @@ export class Game {
       hitstop: (t) => g.hitstop(t),
       hurtPlayer: (fromX) => g.hurtPlayer(fromX),
       nullifyPlayer: () => {
-        if (g.player.value === 0) return;
-        g.player.value = 0;
+        if (g.player.value?.isZero) return;
+        g.player.value = Q.ZERO;
         g.player.valuePop = 1;
         g.compose = null;
         g.sfx.nullify();
@@ -334,24 +464,41 @@ export class Game {
       },
       onIntro: () => {
         g.sealExit(true);
-        g.sfx.setDrone('boss');
+        g.sfx.setDrone(g.chapter === 2 ? 'boss2' : 'boss');
         g.bossTitleT = 0;
       },
       onResolved: () => {
-        g.save.bossDone = true;
-        g.learn('0');
+        const id = g.bossId;
+        if (!g.save.bosses.includes(id)) g.save.bosses.push(id);
+        if (id === 'zero') g.learn('0');
         writeSave(g.save);
         g.sealExit(false);
+        g.openSeals(id);
         g.sfx.setDrone('none');
+        g.endChapter = g.chapter;
         g.setMode('end');
+      },
+      offerPi: (x, y) => {
+        if (!g.shrines.some((s) => s.give === 'π')) g.shrines.push({ key: 'π', give: 'π', x, y, t: 0 });
       },
     };
   }
 
+  /** Close (or reopen) the way x came in, while a boss is fought. */
   private sealExit(on: boolean): void {
-    const ex = this.room.exitCells('I');
-    if (!ex) return;
-    for (const y of ex.cells) this.room.setTile(0, y, on ? SOLID : EMPTY);
+    const map = this.room.def.map;
+    for (let y = 0; y < map.length; y++) if (/[A-Z]/.test(map[y][0])) this.room.setTile(0, y, on ? SOLID : EMPTY);
+  }
+
+  private openSeals(until: string): void {
+    for (const s of this.seals) {
+      if (s.until !== until) continue;
+      for (const [x, y] of s.tiles) {
+        this.room.setTile(x, y, EMPTY);
+        this.fx.burst(x * TILE + TILE / 2, y * TILE + TILE / 2, 8, { speed: 160, life: 0.8, line: true });
+      }
+    }
+    this.seals = this.seals.filter((s) => s.until !== until);
   }
 
   private hurtPlayer(fromX: number): void {
@@ -379,11 +526,17 @@ export class Game {
     this.fx.text(x, y, s, { size, life: 1.3 });
   }
 
-  private setValue(v: number, expr?: string): void {
+  private setValue(v: Q, expr?: string): void {
     this.player.value = v;
     this.player.valuePop = 1;
-    this.sfx.composed(v);
+    this.sfx.composed(v.approx);
     this.lastExpr = expr ? { s: expr, t: 0 } : null;
+  }
+
+  /** Below which x may not fall: 1 at first, 0 once zero is known, no floor past zero. */
+  private get floor(): number | null {
+    if (this.has('±')) return null;
+    return this.has('0') ? 0 : 1;
   }
 
   private onDigit(d: number): void {
@@ -397,41 +550,46 @@ export class Game {
     }
     const c = this.compose;
     this.compose = null;
+    const q = Q.int(d);
     if (!c) {
-      this.setValue(d);
+      this.setValue(q);
       return;
     }
     const v = p.value;
-    let r: number | null = null;
+    let r: Q | null = null;
     let why = '';
     switch (c.op) {
       case '+':
-        r = v + d;
+        r = v.add(q);
+        if (!r) why = 'π will not mix';
         break;
-      case '−':
-        r = v - d;
-        if (r < 1 && !this.has('0')) {
-          why = `${v} − ${d} < 1`;
-          r = null;
-        } else if (r < 0) {
-          why = `${v} − ${d} < 0`;
+      case '−': {
+        r = v.sub(q);
+        const floor = this.floor;
+        if (!r) why = 'π will not mix';
+        else if (floor !== null && r.approx < floor) {
+          why = `${v} − ${d} < ${floor}`;
           r = null;
         }
         break;
+      }
       case '×':
-        r = v * d;
+        r = v.mul(q);
         break;
       case '÷':
         if (d === 0) why = `${v} ÷ 0 is undefined`;
-        else if (v % d !== 0) why = `${d} ∤ ${v}`;
-        else r = v / d;
+        else if (!this.has('/') && !(v.isInt && v.n % d === 0)) why = `${d} ∤ ${v}`;
+        else r = v.div(q);
+        break;
+      case '^':
+        r = v.pow(d);
         break;
     }
-    if (r !== null && r > 999) {
+    if (r && r.unwieldy) {
       why = 'too large to hold';
       r = null;
     }
-    if (r === null) {
+    if (!r) {
       this.sfx.refuse();
       this.float(why);
       return;
@@ -440,9 +598,17 @@ export class Game {
   }
 
   private onOp(op: Op): void {
-    if (!this.has(op) || this.player.value === null) {
+    const p = this.player;
+    if (!this.has(op) || p.value === null) {
       this.sfx.refuse();
       this.float('?');
+      return;
+    }
+    if (op === '−' && this.compose?.op === '−' && this.has('±')) {
+      // − twice: the opposite
+      const v = p.value;
+      this.compose = null;
+      this.setValue(v.neg(), `−(${v})`);
       return;
     }
     this.compose = { op, t: 0 };
@@ -461,17 +627,20 @@ export class Game {
     for (const e of this.enemies) {
       if (e.kind !== 'door' || e.dead) continue;
       if (Math.abs(e.cx - p.cx) < 120 && Math.abs(e.cy - p.cy) < 120) {
-        if (e.n === v) this.openDoor(e);
+        if (e.needsPoints) {
+          this.sfx.refuse();
+          this.float('stand where it says', e.cx, e.y - 44, 18);
+        } else if (v.eq(e.n)) this.openDoor(e);
         else {
           this.sfx.refuse();
-          this.float(`${v} ≠ ${e.n}`, e.cx, e.y - 40, 20);
+          this.float(e.sign ? '≠' : `${v} ≠ ${e.n}`, e.cx, e.y - 44, 20);
         }
         return;
       }
     }
     const view = { x: this.cam.x, y: this.cam.y, w: VIEW_W, h: VIEW_H };
-    const targets = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.n === v && e.appear >= 1 && overlaps(view, e.hitbox()));
-    const bossHit = !!this.boss && this.boss.vulnerable && this.boss.n === v;
+    const targets = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()));
+    const bossHit = !!this.boss && this.boss.matches(v);
     if (!targets.length && !bossHit) {
       this.sfx.refuse();
       this.float('≠', p.cx, p.y - 24, 22);
@@ -492,8 +661,8 @@ export class Game {
         this.sfx.equate(s.i);
         if (e.kind === 'gate') this.openGate(e);
         else this.kill(e, true);
-      } else if (this.boss) {
-        this.boss.struck(this.player.value ?? 0);
+      } else if (this.boss && this.player.value) {
+        this.boss.struck(this.player.value);
       }
       this.shake(4);
       s.i++;
@@ -508,7 +677,7 @@ export class Game {
     e.dead = true;
     this.fx.dissolve(e.cx, e.cy, e.w, e.h, 20 + e.w);
     this.fx.burst(e.cx, e.cy, 10, { speed: 220, life: 0.4, line: true });
-    if (!quiet) this.sfx.kill(this.player.value ?? 1);
+    if (!quiet) this.sfx.kill(Math.abs(this.player.value?.approx ?? 1));
     this.hitstop(0.08);
     this.shake(3);
     if (this.player.hp < this.player.maxHp && Math.random() < 0.3) this.motes.push({ x: e.cx, y: e.cy, t: 0, dead: false });
@@ -529,12 +698,13 @@ export class Game {
   private openDoor(e: Enemy): void {
     this.openGate(e);
     this.hitstop(0.25);
-    this.float(`${e.n} = ${e.n}`, e.cx, e.y - 40, 24);
+    const said = e.needsPoints ? 'there' : e.sign ? `x = ${e.n}` : `${e.n} = ${e.n}`;
+    this.float(said, e.cx, e.y - 44, 24);
   }
 
   /** Division: the bound break into equal shares. */
   private split(e: Enemy, v: number): void {
-    const each = e.n / v;
+    const each = e.n.div(Q.int(v))!;
     this.float(`${e.n} ÷ ${v} = ${each}`, e.cx, e.y - 18, 18);
     if (e.kind === 'gate') this.openGate(e);
     else {
@@ -561,7 +731,7 @@ export class Game {
 
   private strike(e: Enemy): void {
     const p = this.player;
-    const v = p.value ?? 0;
+    const v = p.value ?? Q.ZERO;
     const blocked = (msg: string) => {
       this.sfx.blocked();
       this.float(msg, e.cx, e.y - 12, 16);
@@ -572,31 +742,43 @@ export class Game {
     };
     if (e.kind === 'door') {
       // A door yields to its own number: strike it, or equate beside it.
-      if (v === e.n) return this.openDoor(e);
-      return blocked(`${v} ≠ ${e.n}`);
+      if (e.needsPoints) return blocked('stand where it says');
+      if (v.eq(e.n)) return this.openDoor(e);
+      return blocked(e.sign ? '≠' : `${v} ≠ ${e.n}`);
     }
     if (e.armored) {
       if (!this.has('÷')) return blocked('· · ·');
-      if (v > 1 && v <= e.n && e.n % v === 0) return this.split(e, v);
-      return blocked(v <= 1 ? `${e.n} ÷ ${v} = ${e.n}` : v > e.n ? `${v} > ${e.n}` : `${v} ∤ ${e.n}`);
+      const k = v.isInt ? v.n : 0;
+      if (k > 1 && e.n.divisibleBy(k) && k <= e.n.n) return this.split(e, k);
+      return blocked(k === 1 ? `${e.n} ÷ 1 = ${e.n}` : v.gt(e.n) ? `${v} > ${e.n}` : `${v} ∤ ${e.n}`);
     }
-    if (v === 0) return blocked('− 0');
-    if (v > e.n) return blocked(`${v} > ${e.n}`);
-    e.n -= v;
+    if (v.isZero) return blocked('− 0');
+    if (this.floor !== null && v.gt(e.n)) return blocked(`${v} > ${e.n}`);
+    const left = e.n.sub(v);
+    if (!left) return blocked('π will not mix');
+    const turned = !left.isZero && left.sign !== e.n.sign;
+    e.n = left;
+    e.label = null;
     e.hurtT = 0.12;
     e.popT = 1;
     this.meter = Math.min(1, this.meter + 0.07);
-    if (e.n === 0) {
+    if (e.n.isZero) {
       this.fx.text(e.cx, e.y - 10, `${v} − ${v} = 0`, { size: 14, alpha: 0.6, life: 1.4 });
       this.kill(e);
-    } else {
-      this.fx.text(e.cx, e.y - 10, `− ${v}`, { size: 14, alpha: 0.5 });
-      this.sfx.hit(v);
-      this.hitstop(0.05);
-      this.shake(2);
-      e.knock(p.cx, 210);
-      e.resize();
+      return;
     }
+    this.fx.text(e.cx, e.y - 10, v.sign < 0 ? `− (${v})` : `− ${v}`, { size: 14, alpha: 0.5 });
+    this.sfx.hit(Math.abs(v.approx));
+    this.hitstop(0.05);
+    this.shake(2);
+    if (turned) {
+      // taken past nothing, it turns into its own negative
+      e.turnT = 1;
+      this.sfx.turn();
+      this.hitstop(0.1);
+    }
+    e.knock(p.cx, 210);
+    e.resize();
   }
 
   // ————————————————————————————————————————— update
@@ -640,7 +822,9 @@ export class Game {
         if (this.modeT > 10 && events.length) {
           this.hasSave = true;
           this.menu = 1;
-          this.setMode('title');
+          this.sfx.setDrone(this.chapter === 2 ? 'room2' : 'room');
+          this.fadeA = 1;
+          this.setMode('play');
         }
         break;
     }
@@ -648,12 +832,19 @@ export class Game {
     this.fadeA = Math.max(0, this.fadeA - dt * 2.2);
   }
 
+  private menuItems(): string[] {
+    return this.hasSave ? ['begin anew', 'continue', 'begin at chapter II'] : ['begin', 'begin at chapter II'];
+  }
+
   private updateTitle(events: Ev[]): void {
-    const items = this.hasSave ? 2 : 1;
+    const items = this.menuItems();
     for (const e of events) {
-      if (e.k === 'up' || e.k === 'down') this.menu = (this.menu + 1) % items;
+      if (e.k === 'up') this.menu = (this.menu + items.length - 1) % items.length;
+      if (e.k === 'down') this.menu = (this.menu + 1) % items.length;
       if (e.k === 'jump' || e.k === 'equate' || e.k === 'strike') {
-        if (this.menu === 1 && this.hasSave) this.continueGame();
+        const it = items[this.menu];
+        if (it === 'continue') this.continueGame();
+        else if (it === 'begin at chapter II') this.chapterTwo();
         else this.newGame();
         return;
       }
@@ -662,6 +853,7 @@ export class Game {
 
   private updatePlay(realDt: number, events: Ev[]): void {
     const p = this.player;
+    p.canDiag = this.has('√2');
     for (const e of events) {
       switch (e.k) {
         case 'pause':
@@ -773,9 +965,9 @@ export class Game {
         this.meter = Math.min(1, this.meter + 0.04);
       }
       const boss = this.boss;
-      if (boss && !p.struck.has(boss) && boss.touches(box)) {
+      if (boss && p.value && !p.struck.has(boss) && boss.touches(box)) {
         p.struck.add(boss);
-        const msg = boss.struck(p.value ?? 0);
+        const msg = boss.struck(p.value);
         if (msg) {
           this.float(msg, boss.x, boss.y - boss.r - 18, 18);
           p.recoil(boss.x, 220);
@@ -833,6 +1025,22 @@ export class Game {
       }
     }
 
+    // points of the plane: stand exactly there
+    for (const pt of this.points) {
+      pt.t += dt;
+      if (pt.lit || !p.onGround) continue;
+      if (Math.abs(p.cx - pt.x) < 12 && Math.abs(p.y + p.h - pt.y) < 3) {
+        pt.lit = true;
+        pt.t = 0;
+        this.sfx.point();
+        this.flash(0.15);
+        this.fx.converge(pt.x, pt.y, 18, 60, 0.6);
+        if (this.points.every((q) => q.lit)) {
+          for (const e of this.enemies) if (e.needsPoints && !e.dead) this.openDoor(e);
+        }
+      }
+    }
+
     // lamps
     for (const l of this.lamps) {
       const near = Math.abs(p.cx - l.x) < 26 && Math.abs(p.y + p.h - l.y) < 40;
@@ -862,9 +1070,13 @@ export class Game {
   private take(s: Shrine): void {
     this.shrines = this.shrines.filter((x) => x !== s);
     this.learn(s.give);
-    if (!this.save.taken.includes(s.key)) this.save.taken.push(s.key);
+    if (s.give !== 'π' && !this.save.taken.includes(s.key)) this.save.taken.push(s.key);
     writeSave(this.save);
-    if (s.give === '1') this.player.value = 1;
+    if (s.give === '1') this.player.value = Q.ONE;
+    if (s.give === 'π') {
+      this.player.value = Q.PI;
+      this.player.valuePop = 1;
+    }
     this.player.hp = this.player.maxHp;
     this.compose = null;
     this.pickup = s.give;
@@ -878,8 +1090,13 @@ export class Game {
 
   render(): void {
     const { ctx, canvas } = this;
+    if (this.mode === 'title') setPalette(false);
+    else if (this.mode === 'chapter') setPalette(this.chapterNo === 2);
+    else if (this.mode === 'end') setPalette(this.endChapter === 2);
+    else setPalette(this.chapter === 2);
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const scale = Math.min(canvas.width / VIEW_W, canvas.height / VIEW_H);
     const ox = (canvas.width - VIEW_W * scale) / 2;
@@ -903,16 +1120,64 @@ export class Game {
 
     if (this.flashA > 0) {
       ctx.globalAlpha = this.flashA * 0.85;
-      ctx.fillStyle = INK;
+      ctx.fillStyle = pal.ink;
       ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     }
     if (this.fadeA > 0) {
       ctx.globalAlpha = this.fadeA;
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = pal.void;
       ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     }
     ctx.globalAlpha = 1;
     ctx.restore();
+  }
+
+  private drawAxes(ox: number, oy: number): void {
+    const ctx = this.ctx;
+    const r = this.room;
+    const X = ox * TILE;
+    const Y = oy * TILE;
+    ctx.strokeStyle = pal.ink;
+    ctx.fillStyle = pal.ink;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+    ctx.moveTo(TILE, Y);
+    ctx.lineTo(r.pw - TILE, Y);
+    ctx.moveTo(X, TILE);
+    ctx.lineTo(X, r.ph - TILE);
+    // arrowheads at the positive ends
+    ctx.moveTo(r.pw - TILE - 8, Y - 5);
+    ctx.lineTo(r.pw - TILE, Y);
+    ctx.lineTo(r.pw - TILE - 8, Y + 5);
+    ctx.moveTo(X - 5, TILE + 8);
+    ctx.lineTo(X, TILE);
+    ctx.lineTo(X + 5, TILE + 8);
+    ctx.stroke();
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath();
+    for (let a = -ox + 1; a < r.w - ox - 1; a++) {
+      ctx.moveTo(X + a * TILE, Y - (a % 5 === 0 ? 6 : 3));
+      ctx.lineTo(X + a * TILE, Y + (a % 5 === 0 ? 6 : 3));
+    }
+    for (let b = -(r.h - oy) + 2; b < oy; b++) {
+      ctx.moveTo(X - (b % 5 === 0 ? 6 : 3), Y - b * TILE);
+      ctx.lineTo(X + (b % 5 === 0 ? 6 : 3), Y - b * TILE);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 0.45;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let a = -ox + 1; a < r.w - ox - 1; a++) {
+      if (a !== 0 && a % 5 === 0) drawQ(ctx, Q.int(a), X + a * TILE, Y + 16, 13);
+    }
+    for (let b = -(r.h - oy) + 2; b < oy; b++) {
+      if (b !== 0 && b % 5 === 0) drawQ(ctx, Q.int(b), X - 16, Y - b * TILE, 13);
+    }
+    ctx.font = serif(18);
+    ctx.fillText('x', r.pw - TILE - 4, Y - 16);
+    ctx.fillText('y', X + 14, TILE + 4);
+    ctx.globalAlpha = 1;
   }
 
   private drawWorld(): void {
@@ -923,11 +1188,11 @@ export class Game {
     ctx.save();
     ctx.translate(-camX, -camY);
 
-    ctx.fillStyle = AIR;
+    ctx.fillStyle = pal.air;
     ctx.fillRect(0, 0, r.pw, r.ph);
 
     // graph paper
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.globalAlpha = 0.07;
     const gx0 = Math.max(0, Math.floor(camX / TILE));
     const gy0 = Math.max(0, Math.floor(camY / TILE));
@@ -935,15 +1200,16 @@ export class Game {
       for (let gy = gy0; gy <= gy0 + VIEW_H / TILE + 1; gy++) ctx.fillRect(gx * TILE - 0.75, gy * TILE - 0.75, 1.5, 1.5);
     }
     ctx.globalAlpha = 1;
+    if (r.def.axes) this.drawAxes(r.def.axes.ox, r.def.axes.oy);
 
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = pal.void;
     r.forEachSolid((x, y) => {
       const px = x * TILE;
       const py = y * TILE;
       if (px > camX + VIEW_W || px + TILE < camX || py > camY + VIEW_H || py + TILE < camY) return;
       ctx.fillRect(px - 0.5, py - 0.5, TILE + 1, TILE + 1);
     });
-    ctx.strokeStyle = INK;
+    ctx.strokeStyle = pal.ink;
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.85;
     ctx.stroke(r.edges());
@@ -952,21 +1218,33 @@ export class Game {
     ctx.globalAlpha = 1;
 
     // inscriptions
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = serif(19);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     for (const t of this.texts) {
       if (t.a <= 0) continue;
       ctx.globalAlpha = t.a * 0.72;
-      ctx.fillText(t.s, t.x, t.y + (1 - t.a) * 6);
+      drawRich(ctx, t.s, t.x, t.y + (1 - t.a) * 6, 19);
+    }
+    ctx.globalAlpha = 1;
+
+    // points of the plane, once found
+    for (const pt of this.points) {
+      if (!pt.lit) continue;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 4 + Math.max(0, 1 - pt.t) * 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = Math.min(1, pt.t * 2) * 0.7;
+      ctx.font = serif(16);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`(${String(pt.a).replace('-', '−')}, ${String(pt.b).replace('-', '−')})`, pt.x, pt.y - 48);
     }
     ctx.globalAlpha = 1;
 
     // lamps
     for (const l of this.lamps) {
       const lit = this.save.lamp?.room === r.def.id && this.save.lamp.x === l.x;
-      ctx.strokeStyle = INK;
+      ctx.strokeStyle = pal.ink;
       ctx.lineWidth = 1.5;
       ctx.globalAlpha = 0.7;
       ctx.beginPath();
@@ -976,7 +1254,7 @@ export class Game {
       ctx.lineTo(l.x + 5, l.y);
       ctx.stroke();
       ctx.globalAlpha = lit ? 1 : 0.45;
-      ctx.fillStyle = INK;
+      ctx.fillStyle = pal.ink;
       ctx.beginPath();
       ctx.arc(l.x, l.y - 34, lit ? 3.5 + Math.sin(this.time * 2) * 0.5 : 2.5, 0, Math.PI * 2);
       ctx.fill();
@@ -984,10 +1262,12 @@ export class Game {
     ctx.globalAlpha = 1;
 
     // shrines: a glyph waiting above a thin stand
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     for (const s of this.shrines) {
-      const small = /[2-9]/.test(s.give);
+      const small = /^[2-9]$/.test(s.give);
       const gy = s.y - (small ? 42 : 56) + Math.sin(s.t * 1.6) * 3;
-      ctx.strokeStyle = INK;
+      ctx.strokeStyle = pal.ink;
       ctx.lineWidth = 1;
       ctx.globalAlpha = 0.5;
       ctx.beginPath();
@@ -1001,14 +1281,14 @@ export class Game {
       ctx.arc(s.x, gy, small ? 16 : 22, 0, Math.PI * 2);
       ctx.stroke();
       ctx.globalAlpha = 1;
-      ctx.fillStyle = INK;
-      ctx.font = serif(small ? 24 : 34, { weight: 500 });
+      ctx.fillStyle = pal.ink;
+      ctx.font = serif(small ? 24 : s.give.length > 1 ? 26 : 34, { weight: 500 });
       ctx.fillText(s.give, s.x, gy + 1);
     }
 
     for (const m of this.motes) {
       ctx.globalAlpha = 0.6 + 0.4 * Math.sin(m.t * 6);
-      ctx.fillStyle = INK;
+      ctx.fillStyle = pal.ink;
       ctx.beginPath();
       ctx.arc(m.x, m.y, 2.5, 0, Math.PI * 2);
       ctx.fill();
@@ -1018,7 +1298,7 @@ export class Game {
     for (const e of this.enemies) e.draw(this.ctx);
     this.boss?.draw(ctx);
 
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     for (const s of this.shots) {
       ctx.beginPath();
       ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
@@ -1035,7 +1315,7 @@ export class Game {
     // slowed time: a ring of attention
     if (this.timeScale < 0.95 && this.mode === 'play') {
       const k = (1 - this.timeScale) / 0.72;
-      ctx.strokeStyle = INK;
+      ctx.strokeStyle = pal.ink;
       ctx.lineWidth = 1;
       ctx.globalAlpha = 0.22 * k;
       ctx.beginPath();
@@ -1048,9 +1328,11 @@ export class Game {
     if (this.equateSeq) {
       const s = this.equateSeq;
       const p = this.player;
-      ctx.strokeStyle = INK;
-      ctx.fillStyle = INK;
+      ctx.strokeStyle = pal.ink;
+      ctx.fillStyle = pal.ink;
       ctx.lineWidth = 1;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
       const k = clamp(s.t / 0.25, 0, 1);
       const draw = (x: number, y: number) => {
         ctx.globalAlpha = 0.6 * k;
@@ -1074,16 +1356,16 @@ export class Game {
 
     this.dust.draw(ctx, camX, camY, VIEW_W, VIEW_H, this.time);
     this.drawLight(camX, camY);
-    ctx.drawImage(this.vignette, 0, 0);
+    ctx.drawImage(pal.inverted ? this.vignettes.light : this.vignettes.dark, 0, 0);
   }
 
   private drawLight(camX: number, camY: number): void {
     const l = this.lctx;
-    const dark = this.room.def.dark ?? 0.84;
+    const dark = this.room.def.dark ?? (pal.inverted ? 0.8 : 0.84);
     l.setTransform(1, 0, 0, 1, 0, 0);
     l.globalCompositeOperation = 'source-over';
     l.clearRect(0, 0, this.light.width, this.light.height);
-    l.fillStyle = `rgba(0,0,0,${dark})`;
+    l.fillStyle = `rgba(${pal.fog},${dark})`;
     l.fillRect(0, 0, this.light.width, this.light.height);
     l.globalCompositeOperation = 'destination-out';
     l.setTransform(0.5, 0, 0, 0.5, -camX * 0.5, -camY * 0.5);
@@ -1100,9 +1382,10 @@ export class Game {
     if (this.mode !== 'dead') add(p.cx, p.cy, 340, 1);
     for (const lamp of this.lamps) add(lamp.x, lamp.y - 34, 230, 0.85);
     for (const s of this.shrines) add(s.x, s.y - 50, 200, 0.95);
-    for (const e of this.enemies) add(e.cx, e.cy, e.solid ? 120 : 80, 0.55);
+    for (const e of this.enemies) add(e.cx, e.cy, e.solid ? 130 : 80, 0.55);
     for (const s of this.shots) add(s.x, s.y, 50, 0.6);
     for (const m of this.motes) add(m.x, m.y, 50, 0.6);
+    for (const pt of this.points) if (pt.lit) add(pt.x, pt.y, 120, 0.7);
     for (const t of this.texts) if (t.a > 0) add(t.x, t.y, 200, t.a * 0.6);
     this.boss?.lights(add);
     this.ctx.drawImage(this.light, 0, 0, VIEW_W, VIEW_H);
@@ -1111,8 +1394,8 @@ export class Game {
   private drawHud(): void {
     const ctx = this.ctx;
     const p = this.player;
-    ctx.fillStyle = INK;
-    ctx.strokeStyle = INK;
+    ctx.fillStyle = pal.ink;
+    ctx.strokeStyle = pal.ink;
     ctx.lineWidth = 1.2;
 
     // what remains of x
@@ -1130,24 +1413,36 @@ export class Game {
     ctx.textBaseline = 'middle';
     const cx = VIEW_W / 2;
     const by = VIEW_H - 46;
-    let s: string;
-    if (p.value === null) s = 'x';
-    else if (this.compose) s = `x = ${p.value} ${this.compose.op} ${Math.floor(this.time * 3) % 2 ? '_' : ' '}`;
-    else s = `x = ${p.value}`;
+    const size = 30 + p.valuePop * 6;
     ctx.globalAlpha = 0.9;
-    ctx.font = serif(30 + p.valuePop * 6);
-    ctx.fillText(s, cx, by);
+    ctx.font = serif(size);
+    if (p.value === null) ctx.fillText('x', cx, by);
+    else {
+      const pre = 'x = ';
+      const suf = this.compose ? ` ${this.compose.op} ${Math.floor(this.time * 3) % 2 ? '_' : ' '}` : '';
+      const preW = ctx.measureText(pre).width;
+      const sufW = ctx.measureText(suf).width;
+      const qW = qWidth(ctx, p.value, size);
+      const left = cx - (preW + qW + sufW) / 2;
+      ctx.textAlign = 'left';
+      ctx.font = serif(size);
+      ctx.fillText(pre, left, by);
+      drawQ(ctx, p.value, left + preW + qW / 2, by, size);
+      ctx.font = serif(size);
+      ctx.fillText(suf, left + preW + qW, by);
+      ctx.textAlign = 'center';
+    }
     if (this.lastExpr) {
       ctx.globalAlpha = 0.45 * (1 - this.lastExpr.t / 1.6);
       ctx.font = serif(18);
-      ctx.fillText(this.lastExpr.s, cx, by - 30 - this.lastExpr.t * 8);
+      ctx.fillText(this.lastExpr.s, cx, by - 34 - this.lastExpr.t * 8);
     }
     // Δt: how long time can be held
     if (this.meter < 0.999 || this.timeScale < 0.95) {
       ctx.globalAlpha = 0.18;
-      ctx.fillRect(cx - 60, by + 22, 120, 1);
+      ctx.fillRect(cx - 60, by + 24, 120, 1);
       ctx.globalAlpha = 0.6;
-      ctx.fillRect(cx - 60 * this.meter, by + 22, 120 * this.meter, 1.5);
+      ctx.fillRect(cx - 60 * this.meter, by + 24, 120 * this.meter, 1.5);
     }
 
     // what has been learned
@@ -1157,10 +1452,16 @@ export class Game {
       ctx.globalAlpha = this.has(d) ? 0.55 : 0.12;
       ctx.fillText(this.has(d) ? d : '·', VIEW_W - 40 - (known.length - 1 - i) * 15, VIEW_H - 50);
     });
-    OPS.forEach((o, i) => {
+    const ops = this.has('0') ? [...OPS_ONE, ...OPS_TWO] : OPS_ONE;
+    let right = VIEW_W - 34;
+    for (let i = ops.length - 1; i >= 0; i--) {
+      const o = ops[i];
+      const s = this.has(o) ? o : '·';
+      const w = Math.max(14, ctx.measureText(s).width + 6);
       ctx.globalAlpha = this.has(o) ? 0.55 : 0.12;
-      ctx.fillText(this.has(o) ? o : '·', VIEW_W - 40 - (OPS.length - 1 - i) * 18, VIEW_H - 28);
-    });
+      ctx.fillText(s, right - w / 2, VIEW_H - 28);
+      right -= w;
+    }
 
     // where we are
     const rt = this.roomTitle;
@@ -1169,14 +1470,15 @@ export class Game {
       ctx.font = serif(14, { italic: false, weight: 500 });
       spaced(ctx, rt.s.toUpperCase(), cx, 38, 6);
     }
-    if (this.bossTitleT < 5) {
+    const title = BOSS_TITLES[this.bossId];
+    if (title && this.bossTitleT < 5) {
       const t = this.bossTitleT;
       ctx.globalAlpha = Math.min(1, Math.max(0, (t - 1.2) / 0.8)) * Math.min(1, (5 - t) / 1);
       ctx.font = serif(22, { italic: false, weight: 500 });
-      spaced(ctx, 'ZERO', cx, 70, 18);
+      spaced(ctx, title[0], cx, 70, 18);
       ctx.globalAlpha *= 0.6;
       ctx.font = serif(16);
-      ctx.fillText('the number that cannot be lessened', cx, 102);
+      ctx.fillText(title[1], cx, 102);
     }
     ctx.globalAlpha = 1;
   }
@@ -1187,14 +1489,14 @@ export class Game {
     const info = GLYPHS[this.pickup];
     const k = clamp(t / 0.8, 0, 1);
     ctx.globalAlpha = 0.88 * k;
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const small = /[2-9]/.test(this.pickup);
+    const small = /^[2-9]$/.test(this.pickup);
     ctx.globalAlpha = clamp((t - 0.2) / 1, 0, 1);
-    ctx.font = serif((small ? 120 : 160) + (1 - k) * 30, { weight: 500 });
+    ctx.font = serif((small ? 120 : this.pickup.length > 1 ? 130 : 160) + (1 - k) * 30, { weight: 500 });
     ctx.fillText(this.pickup, VIEW_W / 2, 200);
     if (!info) return;
     ctx.globalAlpha = clamp((t - 0.8) / 0.8, 0, 1) * 0.6;
@@ -1219,28 +1521,30 @@ export class Game {
   private drawPause(): void {
     const ctx = this.ctx;
     ctx.globalAlpha = 0.9;
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.globalAlpha = 0.6;
     ctx.font = serif(14, { italic: false, weight: 500 });
-    spaced(ctx, 'STILL', VIEW_W / 2, 86, 10);
+    spaced(ctx, 'STILL', VIEW_W / 2, 66, 10);
     const rows: [string, string][] = [
       ['move', 'A  D'],
       ['aim', 'W  S   (S + Space falls through)'],
       ['jump', 'Space'],
-      ['dash', 'Tab'],
+      ['dash', this.has('√2') ? 'Tab   (with a direction: up, diagonal)' : 'Tab'],
       ['strike', 'J   ·   Num 0'],
       ['hold a digit', '1 – 9'],
       ['+   −   ×   ÷', 'then a digit      type them, or U I O P'],
+      ...(this.has('^') ? ([['^', 'then a digit      type it, or K']] as [string, string][]) : []),
+      ...(this.has('±') ? ([['the opposite', '−  then  −']] as [string, string][]) : []),
       ['equate', 'Enter   ·   ='],
       ['slow time', 'L   ·   Num .'],
       ['return', 'Esc'],
     ];
     rows.forEach(([a, b], i) => {
-      const y = 140 + i * 30;
+      const y = 112 + i * 28;
       ctx.globalAlpha = 0.45;
       ctx.font = serif(18);
       ctx.textAlign = 'right';
@@ -1253,7 +1557,11 @@ export class Game {
     ctx.textAlign = 'center';
     ctx.globalAlpha = 0.4;
     ctx.font = serif(16);
-    ctx.fillText('You cannot take more than there is.   The bound can only be shared.', VIEW_W / 2, 470);
+    const rule =
+      this.chapter === 2
+        ? 'Past zero, numbers turn negative. Hold the opposite to undo them.'
+        : 'You cannot take more than there is.   The bound can only be shared.';
+    ctx.fillText(rule, VIEW_W / 2, 490);
     ctx.globalAlpha = 1;
   }
 
@@ -1261,10 +1569,10 @@ export class Game {
     const ctx = this.ctx;
     const t = this.modeT;
     ctx.globalAlpha = clamp((t - 0.6) / 1.2, 0, 1) * 0.95;
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     ctx.globalAlpha = clamp((t - 1) / 0.8, 0, 1) * clamp((3.3 - t) / 0.6, 0, 1) * 0.8;
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = serif(30);
@@ -1272,16 +1580,16 @@ export class Game {
     ctx.globalAlpha = 1;
   }
 
-  private drawNumberLine(y: number, alpha: number): void {
+  private drawNumberLine(y: number, alpha: number, negative = false): void {
     const ctx = this.ctx;
-    ctx.strokeStyle = INK;
-    ctx.fillStyle = INK;
+    ctx.strokeStyle = pal.ink;
+    ctx.fillStyle = pal.ink;
     ctx.lineWidth = 1;
     ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(VIEW_W, y);
-    const off = (this.time * 8) % 60;
+    const off = (this.time * 8 * (negative ? -1 : 1)) % 60;
     for (let x = -60 + off; x < VIEW_W + 60; x += 60) {
       ctx.moveTo(x, y - 4);
       ctx.lineTo(x, y + 4);
@@ -1292,39 +1600,38 @@ export class Game {
 
   private drawTitle(): void {
     const ctx = this.ctx;
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     this.dust.draw(ctx, 0, 0, VIEW_W, VIEW_H, this.time);
     this.drawNumberLine(300, 0.12);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const fade = clamp(this.modeT / 2, 0, 1);
     ctx.globalAlpha = fade * (0.85 + 0.15 * Math.sin(this.time * 1.3));
     ctx.font = serif(170, { weight: 400 });
-    ctx.fillText('x', VIEW_W / 2, 200);
+    ctx.fillText('x', VIEW_W / 2, 190);
     ctx.globalAlpha = fade * 0.45;
     ctx.font = serif(20);
     ctx.fillText('solve for x', VIEW_W / 2, 330);
 
-    const items = this.hasSave ? ['begin anew', 'continue'] : ['begin'];
-    items.forEach((it, i) => {
+    this.menuItems().forEach((it, i) => {
       const sel = i === this.menu;
       ctx.globalAlpha = fade * (sel ? 0.95 : 0.3);
-      ctx.font = serif(22);
-      ctx.fillText(sel ? `—  ${it}  —` : it, VIEW_W / 2, 395 + i * 36);
+      ctx.font = serif(21);
+      ctx.fillText(sel ? `—  ${it}  —` : it, VIEW_W / 2, 378 + i * 32);
     });
     ctx.globalAlpha = fade * 0.25;
     ctx.font = serif(13, { italic: false, weight: 500 });
-    spaced(ctx, 'CHAPTER I  ·  ARITHMETIC  ·  PROTOTYPE', VIEW_W / 2, 500, 3);
+    spaced(ctx, 'CHAPTERS I – II  ·  PROTOTYPE', VIEW_W / 2, 512, 3);
     if (!document.hasFocus()) {
       ctx.globalAlpha = 0.5;
       ctx.font = serif(16);
-      ctx.fillText('click to focus', VIEW_W / 2, 470);
+      ctx.fillText('click to focus', VIEW_W / 2, 482);
     } else {
       ctx.globalAlpha = fade * 0.3;
       ctx.font = serif(15);
-      ctx.fillText('W / S to choose  ·  Space to begin', VIEW_W / 2, 470);
+      ctx.fillText('W / S to choose  ·  Space to begin', VIEW_W / 2, 482);
     }
     ctx.globalAlpha = 1;
   }
@@ -1332,53 +1639,56 @@ export class Game {
   private drawChapter(): void {
     const ctx = this.ctx;
     const t = this.modeT;
-    ctx.fillStyle = '#000';
+    const c = CHAPTERS[this.chapterNo] ?? CHAPTERS[1];
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     const out = clamp((6 - t) / 0.8, 0, 1);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.globalAlpha = clamp(t / 1.2, 0, 1) * out;
     ctx.font = serif(96, { italic: false, weight: 400 });
-    ctx.fillText('I', VIEW_W / 2, 220);
+    ctx.fillText(c.numeral, VIEW_W / 2, 220);
     ctx.globalAlpha = clamp((t - 1.2) / 1, 0, 1) * out * 0.8;
     ctx.font = serif(18, { italic: false, weight: 500 });
-    spaced(ctx, 'ARITHMETIC', VIEW_W / 2, 310, 12);
+    spaced(ctx, c.name, VIEW_W / 2, 310, 12);
     ctx.globalAlpha = clamp((t - 2.2) / 1, 0, 1) * out * 0.4;
     ctx.font = serif(17);
-    ctx.fillText('the first count', VIEW_W / 2, 345);
+    ctx.fillText(c.sub, VIEW_W / 2, 345);
+    if (this.chapterNo === 2) this.drawNumberLine(400, clamp((t - 2.6) / 1, 0, 1) * out * 0.2, true);
     ctx.globalAlpha = 1;
   }
 
   private drawEnd(): void {
     const ctx = this.ctx;
     const t = this.modeT;
-    ctx.fillStyle = '#000';
+    const e = ENDINGS[this.endChapter] ?? ENDINGS[1];
+    ctx.fillStyle = pal.void;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     this.dust.draw(ctx, 0, 0, VIEW_W, VIEW_H, this.time);
-    ctx.fillStyle = INK;
+    ctx.fillStyle = pal.ink;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const a = (start: number, dur = 1.2) => clamp((t - start) / dur, 0, 1);
     ctx.globalAlpha = a(0.8, 2) * 0.95;
     ctx.font = serif(120, { weight: 400 });
-    ctx.fillText('0', VIEW_W / 2, 150);
+    ctx.fillText(e.glyph, VIEW_W / 2, 150);
     ctx.globalAlpha = a(2.6) * 0.8;
     ctx.font = serif(24);
-    ctx.fillText('Nothing. Hold it close.', VIEW_W / 2, 250);
+    ctx.fillText(e.line, VIEW_W / 2, 250);
     ctx.globalAlpha = a(4.4) * 0.55;
     ctx.font = serif(19);
-    ctx.fillText('Past nothing, the line goes on — into numbers less than nothing.', VIEW_W / 2, 290);
-    this.drawNumberLine(340, a(5.4) * 0.25);
-    ctx.fillStyle = INK;
+    ctx.fillText(e.more, VIEW_W / 2, 290);
+    this.drawNumberLine(340, a(5.4) * 0.25, this.endChapter === 2);
+    ctx.fillStyle = pal.ink;
     ctx.globalAlpha = a(6.4) * 0.7;
     ctx.font = serif(14, { italic: false, weight: 500 });
-    spaced(ctx, 'I  —  ARITHMETIC', VIEW_W / 2, 395, 6);
+    spaced(ctx, e.done, VIEW_W / 2, 395, 6);
     ctx.globalAlpha = a(7.4) * 0.4;
-    spaced(ctx, 'II  —  THE OTHER SIDE', VIEW_W / 2, 425, 6);
+    spaced(ctx, e.next, VIEW_W / 2, 425, 6);
     ctx.font = serif(15);
     ctx.globalAlpha = a(8.4) * 0.35;
-    ctx.fillText('to be continued', VIEW_W / 2, 458);
+    ctx.fillText(e.foot, VIEW_W / 2, 458);
     if (t > 10) {
       ctx.globalAlpha = 0.2 + 0.15 * Math.sin(this.time * 3);
       ctx.fillText('—', VIEW_W / 2, 500);
