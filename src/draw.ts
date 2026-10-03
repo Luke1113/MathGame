@@ -45,14 +45,14 @@ export function drawQ(ctx: CanvasRenderingContext2D, q: Q, x: number, y: number,
   ctx.textBaseline = base;
 }
 
-/** Split "2^x = 64" into runs, where ^run marks a raised exponent. */
+/** Split "2^x = 64" into runs, where ^run (or ^{run}) marks a raised exponent. */
 function runs(s: string): { t: string; sup: boolean }[] {
   const out: { t: string; sup: boolean }[] = [];
-  const re = /\^([0-9a-zπ−-]+)/g;
+  const re = /\^\{([^}]*)\}|\^([0-9a-zπ−-]+)/g;
   let last = 0;
   for (let m = re.exec(s); m; m = re.exec(s)) {
     if (m.index > last) out.push({ t: s.slice(last, m.index), sup: false });
-    out.push({ t: m[1], sup: true });
+    out.push({ t: m[1] ?? m[2], sup: true });
     last = m.index + m[0].length;
   }
   if (last < s.length) out.push({ t: s.slice(last), sup: false });

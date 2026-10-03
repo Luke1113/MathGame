@@ -8,8 +8,7 @@ The prototype has three chapters, which follow the school curriculum:
 
 - **Chapter I — Arithmetic** (elementary): counting, + − × ÷, divisibility, equality. Boss: Zero.
 - **Chapter II — The Other Side** (middle school): negative numbers, fractions, powers, Pythagoras, the coordinate plane, equations. Drawn in negative, black on white. Boss: π.
-
-- **Chapter III — Functions** (high school): functions as weapons and as ground, the floor function, logarithms. Drawn as a blueprint on ruled paper. Boss: e.
+- **Chapter III — Functions** (high school): functions that change what they touch, graphs as ground, the floor function, angles and sines, logarithms. Drawn as a blueprint on ruled paper. Met on the way: e. Boss: f(x).
 
 Each chapter opens beneath the previous boss's arena. To start at a later chapter directly, choose **begin at chapter II** or **begin at chapter III** on the title screen.
 
@@ -37,7 +36,8 @@ npm run check:rooms    # validate the chapter maps
 | `√`, then a digit (2 = square root) | `R` | |
 | the opposite of x | `-` then `-` | `−` then `−` |
 | equate | `Enter` or `=` | `Enter` |
-| fire a function · choose another | `F` · `Q` | |
+| aim a function · set its a · fire | hold `F` · a digit · let go | |
+| turn the function over (negative a) · choose another | `S` while aiming · `Q` | |
 | slow time | `L` | `Num .` |
 | pause / controls | `Esc` | |
 
@@ -66,14 +66,17 @@ npm run check:rooms    # validate the chapter maps
 
 ## The rules of Chapter III
 
-- **Functions carry x.** `F` fires the chosen function, and whatever it touches is struck with x. `Q` chooses another.
-  - **ax:** a straight beam; aim it with W / S.
-  - **sin:** a wave that weaves; its height is x, and a negative x turns it over.
-  - **x²:** a lob; the arc is as high as x.
-  - **⌊x⌋:** builds ⌊x⌋ steps in front of you (⌊5.7⌋ = 5). One wall can only be climbed this way.
-  - **ln:** counts growth back. Nothing can lessen e³, but ln turns it into 3. ln 1 = 0.
-- **Graphs are ground.** Walk up a line, ride a moving sine wave, cross a parabolic bowl.
-- **Plotters** draw the curve they are about to fire along. **Doublers** double every three seconds.
+- **Hold `F` to aim a function.** Time slows and its graph is drawn from your hand, with its equation. A digit sets its a (`y = 2x`, `y = 3 sin x`), `S` turns it over (`y = −2x`), and letting go fires it along that graph. `Q` chooses another function.
+- **A function changes what it touches: f(n).** If it makes zero, the enemy is undone; otherwise the enemy becomes the new number, to be struck exactly as before.
+  - **ax** multiplies: `y = 3x` turns 1/3 into 1.
+  - **x²** squares, then divides by a: `y = x²/9` turns −3 into 1.
+  - **sin** takes the sine. An angle θ becomes a number (`3 sin 90° = 3`; `sin 180° = 0` undoes it). Of a plain number the sine never ends, except at multiples of π.
+  - **ln** counts growth back: `ln e³ = 3`, `ln 1 = 0`. Anything else never ends.
+  - **⌊x⌋** is not fired. It draws `y = ⌊x⌋` from your feet, a steps high: flat floors with nothing between them, each jumped to from the last.
+- **Rules carved in rock.** A groove shaped like a graph runs into the rock from a mouth. Stand at the mouth and fire exactly that rule (the right function, the right a, the right way up) and it runs the groove to the end and opens the lock.
+- **Angles (θ)** turn 15° at a time and fire along the axes. A strike can't touch them: an angle is not a number until its sine is taken.
+- **Graphs are ground.** Ride a moving sine, cross a parabolic bowl. In the rewritten room the floor itself is a graph that keeps changing; where it crosses the axis, its roots can be broken.
+- **f(x)**, the last rule, is the ground of its room. It rewrites itself, fires along graphs, and breaks only at its roots. Growth has no roots: count it back with ln.
 
 ## Code map
 
@@ -89,9 +92,11 @@ npm run check:rooms    # validate the chapter maps
 | `src/boss.ts` | The boss interface, and Zero (Chapter I) |
 | `src/pi.ts` | π (Chapter II) |
 | `src/rooms3.ts` | Chapter III maps |
-| `src/curves.ts` | Graphs that can be stood on, and ⌊x⌋'s stairs |
-| `src/functions.ts` | Shots that fly along graphs |
-| `src/eboss.ts` | e (Chapter III) |
+| `src/curves.ts` | Graphs that can be stood on, and ⌊x⌋'s floors |
+| `src/functions.ts` | The functions' shapes, and shots that fly along graphs |
+| `src/floor.ts` | Ground that is a graph, its forms, and its roots |
+| `src/eboss.ts` | e, met on the way (Chapter III) |
+| `src/fxboss.ts` | f(x) (Chapter III) |
 | `src/audio.ts` | Synthesized sound (Web Audio); no audio files |
 | `src/room.ts`, `src/physics.ts` | Tile collision and terrain outlines |
 

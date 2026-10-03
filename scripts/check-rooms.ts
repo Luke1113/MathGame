@@ -51,11 +51,14 @@ for (const r of ROOMS) {
   for (const c of r.curves ?? []) {
     for (let x = Math.ceil(c.x0); x < Math.floor(c.x1); x++) {
       const u = x + 0.5;
-      const yy = c.k === 'line' ? c.y0 + ((c.y1 - c.y0) * (u - c.x0)) / (c.x1 - c.x0) : c.k === 'sin' ? c.y : c.vy - c.a * (u - c.vx) ** 2;
+      // a living wave can be ridden up to its crest
+      const yy = c.k === 'line' ? c.y0 + ((c.y1 - c.y0) * (u - c.x0)) / (c.x1 - c.x0) : c.k === 'sin' ? c.y - c.amp : c.vy - c.a * (u - c.vx) ** 2;
       const row = Math.floor(yy - 0.01);
       if (row >= 0 && row < h && grid[row][x] === '.') grid[row][x] = '-';
     }
   }
+  // ground that is a graph: count it at the axis, where its ends are pinned and where it comes to rest
+  if (r.floor && r.axes) for (let x = r.floor.x0; x < r.floor.x1; x++) if (grid[r.axes.oy][x] === '.') grid[r.axes.oy][x] = '-';
   const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? '.' : grid[y][x]);
   const solid = (x: number, y: number) => at(x, y) === '#';
   const floor = (x: number, y: number) => at(x, y) === '#' || at(x, y) === '-';

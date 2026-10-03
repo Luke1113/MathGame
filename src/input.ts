@@ -7,6 +7,7 @@ export type Ev =
   | { k: 'equate' }
   | { k: 'pause' }
   | { k: 'fire' }
+  | { k: 'fireUp' }
   | { k: 'cycle' }
   | { k: 'up' }
   | { k: 'down' }
@@ -16,7 +17,7 @@ export type Ev =
   | { k: 'digit'; d: number }
   | { k: 'other' };
 
-export type Hold = 'left' | 'right' | 'up' | 'down' | 'jump' | 'focus';
+export type Hold = 'left' | 'right' | 'up' | 'down' | 'jump' | 'focus' | 'fn';
 
 const HOLD: Record<string, Hold> = {
   KeyA: 'left',
@@ -30,6 +31,7 @@ const HOLD: Record<string, Hold> = {
   Space: 'jump',
   KeyL: 'focus',
   NumpadDecimal: 'focus',
+  KeyF: 'fn',
 };
 
 /** Operator keys by physical position: numpad, plus U I O P (and X for times) on a laptop. */
@@ -110,6 +112,8 @@ export class Input {
     target.addEventListener('keyup', (e) => {
       const hold = HOLD[e.code];
       if (hold) this.held.delete(hold);
+      // a function is aimed while F is held, and fired when it is let go
+      if (e.code === 'KeyF') this.queue.push({ k: 'fireUp' });
     });
     target.addEventListener('blur', () => this.held.clear());
   }

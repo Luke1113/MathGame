@@ -14,7 +14,13 @@ export interface BossHost {
   /** Fire a shot; a digit shot carries its digit, and x can strike it back. */
   shoot(x: number, y: number, vx: number, vy: number, digit?: number): void;
   /** Fire along a graph toward (tx, ty), after showing it. */
-  plot(x: number, y: number, path: 'sin' | 'para', tx: number, ty: number): void;
+  plot(x: number, y: number, path: 'line' | 'sin' | 'para', tx: number, ty: number): void;
+  /** Call a lesser thing into the fight: an angle, or a doubling. */
+  summon(kind: 'spinner' | 'doubler', x: number, y: number): void;
+  /** How many of a kind are about. */
+  count(kind: 'spinner' | 'doubler'): number;
+  /** Clear every shot fired at x. */
+  clearShots(): void;
   /** Fill x's equate meter. */
   reward(amount: number): void;
   shake(a: number): void;
@@ -54,8 +60,12 @@ export interface Boss {
   equate(v: Q): void;
   /** A shot x struck back; true if the boss caught it. */
   catchShot(x: number, y: number, r: number): boolean;
-  /** An ln shot arrives. Undefined if it missed; otherwise text to float, or null. */
-  ln?(x: number, y: number, r: number): string | null | undefined;
+  /** One of x's functions arrives, with its a. Undefined if it missed; otherwise text to float, or null. */
+  fnHit?(fn: string, a: number, x: number, y: number, r: number): string | null | undefined;
+  /** Roots of the ground may be broken now. */
+  readonly rootsOpen?: boolean;
+  /** x broke a root of the ground at px. Returns text to float. */
+  rootBroken?(px: number): string;
 }
 
 type State =

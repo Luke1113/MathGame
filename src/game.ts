@@ -2,10 +2,12 @@ import { Sound } from './audio';
 import { Zero, type Boss, type BossHost } from './boss';
 import { Curve } from './curves';
 import { EBoss, sup } from './eboss';
-import { CurveShot } from './functions';
+import { FORMS, FunctionFloor, rootText, ZERO_FORM } from './floor';
+import { CurveShot, fnLabel, shapePx, strokePath } from './functions';
+import { FxBoss } from './fxboss';
 import { clamp, damp, overlaps, pal, rectCircle, serif, setPalette, TILE, VIEW_H, VIEW_W } from './constants';
 import { drawQ, drawRich, qWidth } from './draw';
-import { Enemy, makeEnemy, type Shot, type World } from './enemies';
+import { Enemy, EXACT_SIN, makeEnemy, type Shot, type World } from './enemies';
 import { groundAt } from './physics';
 import { Dust, Fx } from './fx';
 import { Input, type Ev, type Op } from './input';
@@ -70,6 +72,22 @@ interface Seal {
   tiles: [number, number][];
 }
 
+/** A rule carved in rock: its mouth, its shape, and whether it has been run. */
+interface Hole {
+  key: string;
+  fn: string;
+  a: number;
+  dir: number;
+  len: number;
+  /** The mouth, at the height of x's hand when x stands before it. */
+  x: number;
+  y: number;
+  g: (u: number) => number;
+  done: boolean;
+  /** How lit the channel is: a shot running it, or run. */
+  lit: number;
+}
+
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 const OPS_ONE = ['+', '−', '×', '÷', '='];
 const OPS_TWO = ['±', '/', '^', '√', 'y'];
@@ -103,9 +121,9 @@ const ENDINGS: Record<number, { glyph: string; line: string; more: string; done:
     foot: 'beneath the circle, the floor has opened',
   },
   3: {
-    glyph: 'e',
-    line: 'It grows by exactly as much as it is.',
-    more: 'And every growth begins at one:  e⁰ = 1.',
+    glyph: 'f',
+    line: 'Every rule has its roots.',
+    more: 'Where a rule meets nothing, x can be found:  f(x) = 0.',
     done: 'III  —  FUNCTIONS',
     next: 'IV  —  CALCULUS',
     foot: 'to be continued',
@@ -116,7 +134,11 @@ const BOSS_TITLES: Record<string, [string, string]> = {
   zero: ['ZERO', 'the number that cannot be lessened'],
   pi: ['PI', 'the number that never ends'],
   e: ['E', 'the number that grows by what it is'],
+  fx: ['F ( X )', 'the rule beneath everything'],
 };
+
+/** The forms the rewritten room cycles through: lines, then parabolas. */
+const PRACTICE_FORMS = [...FORMS.linear, ...FORMS.quadratic];
 
 /** Draw text with manual letter spacing, centred on x. */
 function spaced(ctx: CanvasRenderingContext2D, s: string, x: number, y: number, gap: number): void {
@@ -159,6 +181,14 @@ export class Game {
   /** The function F fires; Q chooses another. */
   private fn = 'ax';
   private fnCd = 0;
+  /** While F is held: the a being chosen, drawn from x's hand, and whether S has turned it over. */
+  private aiming: { a: number; flip: boolean } | null = null;
+  /** The a last fired with each function. */
+  private lastA: Record<string, number> = {};
+  private holes: Hole[] = [];
+  /** Ground that is a graph, and how a practice room rewrites it. */
+  private funcFloor: FunctionFloor | null = null;
+  private floorCycle = { every: 0, t: 0, i: 0, need: 0, broken: 0 };
   /** Pieces broken from one whole share a group number. */
   private groupSeq = 0;
   private seals: Seal[] = [];
@@ -258,8 +288,17 @@ export class Game {
     this.bossId = '';
     this.compose = null;
     this.equateSeq = null;
+    this.aiming = null;
+    this.holes = [];
+    this.funcFloor = null;
     this.fx.clear();
     const axes = def.axes;
+    if (def.floor && axes) {
+      const f = def.floor;
+      const cycle = (f.cycle ?? 0) > 0 && !this.lockOpened(def.id);
+      this.funcFloor = new FunctionFloor(axes.ox * TILE, axes.oy * TILE, f.x0 * TILE, f.x1 * TILE, cycle ? PRACTICE_FORMS[0] : ZERO_FORM, f.lo, f.hi, f.pin ?? 0);
+      this.floorCycle = { every: cycle ? f.cycle! : 0, t: f.cycle ?? 0, i: 0, need: f.need ?? 0, broken: 0 };
+    }
     for (const pl of this.room.placed) {
       const s = pl.spec;
       const fx = pl.tx * TILE + TILE / 2;
@@ -278,6 +317,45 @@ export class Game {
             e.resize();
           }
           e.appear = 1;
+          this.enemies.push(e);
+          break;
+        }
+        case 'spinner': {
+          const e = makeEnemy('spinner', Q.ZERO, pl.key, pl.tx, pl.ty);
+          e.deg = s.deg;
+          e.appear = 1;
+          this.enemies.push(e);
+          break;
+        }
+        case 'hole': {
+          const done = this.save.opened.includes(pl.key);
+          const dir = s.dir;
+          this.holes.push({
+            key: pl.key,
+            fn: s.fn,
+            a: s.a,
+            dir,
+            len: s.len,
+            x: (pl.tx + (dir > 0 ? 1 : 0)) * TILE,
+            y: pl.ty * TILE + 14,
+            g: shapePx(s.fn, s.a),
+            done,
+            lit: done ? 1 : 0,
+          });
+          break;
+        }
+        case 'lock': {
+          if (this.save.opened.includes(pl.key)) break;
+          const e = new Enemy('door', Q.ZERO, pl.key);
+          e.lock = true;
+          e.sign = s.sign ?? null;
+          e.x = pl.tx * TILE;
+          e.y = pl.ty * TILE;
+          e.w = TILE;
+          e.h = s.h * TILE;
+          e.appear = 1;
+          for (let y = 0; y < s.h; y++) e.tiles.push([pl.tx, pl.ty + y]);
+          for (const [x, y] of e.tiles) this.room.setTile(x, y, SOLID, true);
           this.enemies.push(e);
           break;
         }
@@ -358,8 +436,15 @@ export class Game {
           this.bossId = s.which;
           {
             const by = pl.ty * TILE + TILE / 2;
+            const host = this.bossHost();
             this.boss =
-              s.which === 'zero' ? new Zero(this.bossHost(), fx, by) : s.which === 'pi' ? new Pi(this.bossHost(), fx, by) : new EBoss(this.bossHost(), fx, by);
+              s.which === 'zero'
+                ? new Zero(host, fx, by)
+                : s.which === 'pi'
+                  ? new Pi(host, fx, by)
+                  : s.which === 'fx' && this.funcFloor
+                    ? new FxBoss(host, this.funcFloor, fx, by)
+                    : new EBoss(host, fx, by, true);
           }
           break;
       }
@@ -368,6 +453,11 @@ export class Game {
     this.roomTitle = { s: def.name, t: 0 };
     this.sfx.setDrone(this.boss ? 'none' : this.roomDrone);
     this.fadeA = 1;
+  }
+
+  /** Has this room's lock already been opened? */
+  private lockOpened(id: string): boolean {
+    return this.save.opened.some((k) => k.startsWith(`${id}:k`));
   }
 
   private get roomDrone(): 'room' | 'room2' | 'room3' {
@@ -521,7 +611,13 @@ export class Game {
   }
 
   private respawn(): void {
-    const lamp = this.save.lamp;
+    let lamp = this.save.lamp;
+    if (lamp && !ROOM_BY_ID[lamp.room]) {
+      // a lamp in a room that is no longer there: begin again where its chapter begins
+      const room = new Room(ROOM_BY_ID['graph']);
+      lamp = { room: 'graph', ...room.lamps[0] };
+      this.save.lamp = lamp;
+    }
     if (lamp) {
       this.loadRoom(lamp.room);
       this.resetPlayer();
@@ -572,6 +668,29 @@ export class Game {
       shoot: (x, y, vx, vy, digit) => g.shots.push({ x, y, vx, vy, r: digit ? 6 + digit * 0.9 : 4, life: 5, dead: false, digit }),
       reward: (a) => g.reward(a),
       plot: (x, y, path, tx, ty) => g.plot(x, y, path, tx, ty),
+      summon: (kind, x, y) => {
+        const e = makeEnemy(kind, Q.int(kind === 'doubler' ? 2 + Math.floor(Math.random() * 3) : 0), `summoned/${g.time}`, 0, 0);
+        if (kind === 'spinner') e.deg = [30, 45, 60, 120, 135, 240, 300][Math.floor(Math.random() * 7)];
+        e.x = x - e.w / 2;
+        e.y = y - e.h / 2;
+        e.homeX = x;
+        e.homeY = y + 60;
+        e.appear = 0;
+        g.enemies.push(e);
+        g.fx.converge(x, y, 16, 50, 0.5);
+      },
+      count: (kind) => g.enemies.filter((e) => e.kind === kind && !e.dead).length,
+      clearShots: () => {
+        for (const s of g.shots) if (!s.friendly) g.fx.burst(s.x, s.y, 4, { speed: 80, life: 0.3 });
+        g.shots = g.shots.filter((s) => s.friendly);
+        g.cshots = g.cshots.filter((c) => c.friendly);
+        // and what it called into the fight goes with them
+        for (const e of g.enemies) {
+          if (!e.key.startsWith('summoned/') && !e.key.includes('summoned/')) continue;
+          e.dead = true;
+          g.fx.dissolve(e.cx, e.cy, e.w, e.h, 20);
+        }
+      },
       shake: (a) => g.shake(a),
       flash: (a) => g.flash(a),
       hitstop: (t) => g.hitstop(t),
@@ -600,10 +719,19 @@ export class Game {
         const id = g.bossId;
         if (!g.save.bosses.includes(id)) g.save.bosses.push(id);
         if (id === 'zero') g.learn('0');
-        if (id === 'e') g.learn('e');
-        writeSave(g.save);
         g.sealExit(false);
         g.openSeals(id);
+        if (id === 'e') {
+          // e is met on the way, not at the end: it is taken, like any glyph
+          g.learn('e');
+          writeSave(g.save);
+          g.sfx.setDrone(g.roomDrone);
+          g.pickup = 'e';
+          g.flash(1);
+          g.setMode('pickup');
+          return;
+        }
+        writeSave(g.save);
         g.sfx.setDrone('none');
         g.endChapter = g.chapter;
         g.setMode('end');
@@ -654,6 +782,13 @@ export class Game {
 
   private float(s: string, x = this.player.cx, y = this.player.y - 22, size = 16): void {
     this.fx.text(x, y, s, { size, life: 1.3 });
+  }
+
+  /** Words for the boss: above it, or beneath it when it is near the top of the room. */
+  private floatAtBoss(s: string): void {
+    const b = this.boss!;
+    const above = b.y - b.r - 18;
+    this.float(s, b.x, above < 70 ? b.y + b.r + 74 : above, 18);
   }
 
   private setValue(v: Q, expr?: string): void {
@@ -774,7 +909,10 @@ export class Game {
     for (const e of this.enemies) {
       if (e.kind !== 'door' || e.dead) continue;
       if (Math.abs(e.cx - p.cx) < 120 && Math.abs(e.cy - p.cy) < 120) {
-        if (e.needsPoints) {
+        if (e.lock) {
+          this.sfx.refuse();
+          this.float(this.lockSays(e), e.cx, e.y - 44, 18);
+        } else if (e.needsPoints) {
           this.sfx.refuse();
           this.float('stand where it says', e.cx, e.y - 44, 18);
         } else if (e.opensTo(v)) this.openDoor(e);
@@ -791,7 +929,9 @@ export class Game {
       return;
     }
     const view = { x: this.cam.x, y: this.cam.y, w: VIEW_W, h: VIEW_H };
-    const equal = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.ePow === null && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()));
+    const equal = this.enemies.filter(
+      (e) => !e.dead && e.kind !== 'door' && e.kind !== 'spinner' && e.ePow === null && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()),
+    );
     const bossHit = !!this.boss && this.boss.matches(v);
     // the nearest equal, and whatever equals stand close beside it
     const targets: Enemy[] = [];
@@ -918,16 +1058,22 @@ export class Game {
   }
 
   /** Fire along a graph at x: shown first, then followed. */
-  private plot(x: number, y: number, path: 'sin' | 'para', tx: number, ty: number): void {
+  private plot(x: number, y: number, path: 'line' | 'sin' | 'para', tx: number, ty: number): void {
     const dir = tx >= x ? 1 : -1;
     const run = Math.max(96, Math.abs(tx - x));
+    // heights are measured up, so the rise to x is y − ty
     if (path === 'para') {
       const span = Math.min(620, run);
-      const slope = (ty - y) / span;
-      this.cshots.push(new CurveShot('para', x, y, dir, slope, 90 + Math.random() * 70, span, 260, null, false, 0.9, 3.2));
+      const slope = (y - ty) / span;
+      const amp = 90 + Math.random() * 70;
+      const g = (u: number) => slope * u + (4 * amp * u * (span - u)) / (span * span);
+      this.cshots.push(new CurveShot(g, x, y, dir, 260, false, null, 0, 0.9, 3.2));
+    } else if (path === 'line') {
+      const slope = clamp((y - ty) / run, -2.5, 2.5);
+      this.cshots.push(new CurveShot((u) => slope * u, x, y, dir, 300, false, null, 0, 0.8, 3));
     } else {
-      const slope = clamp((ty - y) / run, -1.5, 1.5);
-      this.cshots.push(new CurveShot('sin', x, y, dir, slope, 36, 0, 230, null, false, 0.9, 3.2));
+      const slope = clamp((y - ty) / run, -1.5, 1.5);
+      this.cshots.push(new CurveShot((u) => slope * u + 36 * Math.sin((u / 110) * Math.PI * 2), x, y, dir, 230, false, null, 0, 0.9, 3.2));
     }
     this.sfx.tone(523, 0.5, { vol: 0.04, wet: 0.6 });
   }
@@ -941,102 +1087,248 @@ export class Game {
     if (!fns.length) return this.sfx.refuse();
     this.fn = fns[(fns.indexOf(this.fn) + 1) % fns.length];
     this.sfx.compose();
-    this.float(this.fn === 'ax' ? 'y = ax' : this.fn === '⌊x⌋' ? '⌊x⌋' : this.fn === 'ln' ? 'ln' : `y = ${this.fn === 'sin' ? 'a·sin x' : 'ax²'}`);
+    if (!this.aiming) this.float(fnLabel(this.fn, this.lastA[this.fn] ?? 1));
   }
 
-  /** F: x's chosen function, carrying x. */
-  private fireFunction(): void {
+  /** F pressed: time slows, and the function is drawn from x's hand until F is let go. */
+  private beginAim(): void {
+    const fns = this.learnedFunctions();
+    if (!fns.length) return this.sfx.refuse();
+    if (!this.has(this.fn)) this.fn = fns[0];
+    this.aiming = { a: this.lastA[this.fn] ?? 1, flip: false };
+    this.compose = null;
+    this.sfx.compose();
+  }
+
+  /** The a being aimed with; S turns it over. */
+  private get aimA(): number {
+    const a = this.aiming?.a ?? 1;
+    return this.aiming?.flip && this.fn !== '⌊x⌋' ? -a : a;
+  }
+
+  private get hand(): { x: number; y: number } {
     const p = this.player;
-    if (!this.has(this.fn)) {
-      const fns = this.learnedFunctions();
-      if (!fns.length) return this.sfx.refuse();
-      this.fn = fns[0];
-    }
-    if (this.fnCd > 0) return;
-    const v = p.value;
-    if (!v && this.fn !== 'ln') return this.sfx.refuse();
-    const sx = p.cx + p.facing * 10;
-    const sy = p.y + 12;
-    const dir = p.facing;
-    const aim = this.input.down('up') ? -1 : this.input.down('down') && !p.onGround ? 1 : 0;
-    this.fnCd = 0.38;
-    switch (this.fn) {
-      case 'ax':
-        this.cshots.push(new CurveShot('line', sx, sy, dir, aim, 0, 0, 620, v, true, 0, 1.1));
-        break;
-      case 'sin': {
-        const amp = clamp(Math.abs(v!.approx), 0.5, 3) * 20 * (v!.sign < 0 ? -1 : 1);
-        this.cshots.push(new CurveShot('sin', sx, sy, dir, aim * 0.5, amp, 0, 420, v, true, 0, 1.6));
-        break;
-      }
-      case 'x²': {
-        const amp = clamp(Math.abs(v!.approx), 0.5, 5) * 32 * (v!.sign < 0 ? -1 : 1);
-        this.cshots.push(new CurveShot('para', sx, sy, dir, 0, amp, 224, 340, v, true, 0, 2));
-        break;
-      }
-      case '⌊x⌋': {
-        const n = Math.min(6, Math.floor(Math.abs(v!.approx)));
-        if (n < 1) {
-          this.sfx.refuse();
-          this.float(`⌊${v}⌋ = 0`);
-          return;
-        }
-        // one staircase at a time
-        this.curves = this.curves.filter((c) => !c.steps);
-        this.curves.push(Curve.stairs(p.cx, p.y + p.h, dir, n, this.time));
-        this.float(`⌊${v}⌋ = ${n}`);
-        this.sfx.tone(196, 0.6, { vol: 0.1, type: 'triangle', wet: 0.4 });
-        return;
-      }
-      case 'ln':
-        this.cshots.push(new CurveShot('ln', sx, sy, dir, aim, 0, 0, 300, null, true, 0, 1.6));
-        break;
-    }
-    this.sfx.swing();
+    return { x: p.cx + p.facing * 10, y: p.y + 12 };
   }
 
-  /** ln counts growth back: eᵏ becomes k; ln 1 = 0 undoes a 1; anything else never ends. */
-  private lnHit(e: Enemy): void {
-    if (e.ePow !== null) {
-      const k = e.ePow;
-      e.ePow = null;
-      e.n = Q.int(k);
-      if (e.kind === 'door') e.sign = null;
-      else e.label = null;
-      e.popT = 1;
-      e.resize();
-      this.float(`ln e${sup(k)} = ${k}`, e.cx, e.y - 18, 20);
-      this.sfx.nullify();
+  /** F let go: the function flies (or, for ⌊x⌋, is built). */
+  private releaseAim(): void {
+    if (!this.aiming) return;
+    const a = this.aimA;
+    this.lastA[this.fn] = this.aiming.a;
+    this.aiming = null;
+    if (this.fnCd > 0) return;
+    const p = this.player;
+    const dir = p.facing;
+    this.fnCd = 0.3;
+    if (this.fn === '⌊x⌋') {
+      // one floor at a time
+      this.curves = this.curves.filter((c) => !c.flat);
+      this.curves.push(Curve.ledges(p.cx, p.y + p.h, dir, a, this.time));
+      this.float(`⌊x⌋,  0 ≤ x < ${a + 1}`);
+      this.sfx.tone(196, 0.6, { vol: 0.1, type: 'triangle', wet: 0.4 });
       return;
     }
-    if (e.n.eq(Q.ONE) && !e.solid && !e.armored && e.kind !== 'whole') {
-      this.float('ln 1 = 0', e.cx, e.y - 18, 18);
+    const h = this.hand;
+    const shot = new CurveShot(shapePx(this.fn, a), h.x, h.y, dir, 560, true, this.fn, a, 0, 1.6);
+    this.cshots.push(shot);
+    // fired with the hand at a mouth: the rock takes it in, if it is the rule carved there
+    const mouth = this.holes.find((m) => !m.done && m.dir === dir && Math.abs(h.x - m.x) <= 28 && Math.abs(h.y - m.y) <= 20);
+    if (mouth) {
+      if (mouth.fn === this.fn && mouth.a === a) {
+        shot.restartAt(mouth.x, mouth.y);
+        shot.hole = mouth;
+        mouth.lit = 1;
+        this.sfx.tone(523, 0.9, { vol: 0.07, wet: 0.7 });
+      } else {
+        shot.dead = true;
+        this.sfx.blocked();
+        this.float('it does not fit', mouth.x - dir * 24, mouth.y - 28, 16);
+      }
+    }
+    this.sfx.swing();
+    this.sfx.tone(392 * (1 + Math.abs(a) / 9), 0.35, { vol: 0.05, wet: 0.5 });
+  }
+
+  /** What a lock says to anything but what opens it. */
+  private lockSays(e: Enemy): string {
+    return e.sign === 'f(x) = 0' ? 'break it where it meets nothing' : 'it opens from within the rock';
+  }
+
+  /**
+   * A function arrives at a number and is applied to it: f(n). What becomes
+   * zero is undone; anything else becomes what the function made of it.
+   */
+  private applyFn(e: Enemy, fn: string, a: number): void {
+    const said = (t: string, size = 17) => this.float(t, e.cx, e.y - 18, size);
+    const refuse = (t: string) => {
+      this.sfx.blocked();
+      said(t, 15);
+      e.hurtT = 0.05;
+    };
+    const k = String(a).replace('-', '−');
+    const ka = a === 1 ? '' : a === -1 ? '−' : `${k} `;
+    if (e.kind === 'spinner') {
+      const d = e.deg;
+      if (fn === 'ax') {
+        // an angle times a: it turns further
+        const to = (((d * a) % 360) + 360) % 360;
+        said(`${k} · ${d}° = ${to}°`);
+        e.deg = to;
+        e.popT = 1;
+        this.sfx.hit(Math.abs(a));
+        return;
+      }
+      if (fn !== 'sin') return refuse(fn === 'x²' ? 'an angle squared is not an angle' : `${fn} ${d}° is not a number`);
+      const exact = EXACT_SIN[d];
+      if (!exact) return refuse(`sin ${d}° never ends`);
+      const r = Q.of(exact[0] * a, exact[1]);
+      said(`${ka}sin ${d}° = ${r}`, 19);
+      if (r.isZero) return this.kill(e);
+      // its sine taken, the angle is a number at last
+      e.dead = true;
+      const n = makeEnemy('drifter', r, `${e.key}/sin`, 0, 0);
+      n.x = e.cx - n.w / 2;
+      n.y = e.cy - n.h / 2;
+      n.homeX = e.homeX;
+      n.homeY = e.homeY;
+      n.appear = 0.5;
+      n.popT = 1;
+      this.enemies.push(n);
+      this.fx.burst(e.cx, e.cy, 12, { speed: 180, life: 0.5, line: true });
+      this.sfx.turn();
+      return;
+    }
+    if (e.kind === 'door' || e.kind === 'gate') {
+      if (fn === 'ln' && e.ePow !== null) {
+        const pow = e.ePow;
+        e.ePow = null;
+        e.n = Q.int(a * pow);
+        e.sign = null;
+        e.popT = 1;
+        said(`${ka}ln e${sup(pow)} = ${e.n}`, 20);
+        this.sfx.nullify();
+        return;
+      }
+      return refuse(e.lock ? this.lockSays(e) : 'it opens only to x');
+    }
+    let r: Q | null = null;
+    let t = '';
+    if (e.ePow !== null) {
+      const pow = e.ePow;
+      if (fn === 'ln') {
+        // growth counted back: ln eᵏ = k
+        e.ePow = null;
+        e.label = null;
+        e.n = Q.int(a * pow);
+        e.popT = 1;
+        e.resize();
+        said(`${ka}ln e${sup(pow)} = ${e.n}`, 20);
+        this.sfx.nullify();
+        if (e.n.isZero) this.kill(e);
+        return;
+      }
+      if (fn === 'x²' && a === 1 && pow * 2 <= 9) {
+        e.ePow = pow * 2;
+        e.label = `e^${pow * 2}`;
+        e.popT = 1;
+        e.resize();
+        said(`(e${sup(pow)})² = e${sup(pow * 2)}`);
+        this.sfx.hit(2);
+        return;
+      }
+      return refuse(fn === 'ax' ? `${k}e${sup(pow)} is still growth` : `${fn} e${sup(pow)} never ends`);
+    }
+    const n = e.n;
+    const nb = n.sign < 0 ? `(${n})` : `${n}`;
+    switch (fn) {
+      case 'ax':
+        r = n.mul(Q.int(a));
+        t = `${k} · ${nb} = ${r}`;
+        break;
+      case 'x²':
+        r = n.mul(n).div(Q.int(a));
+        t = `${nb}²${a === 1 ? '' : ` / ${k}`} = ${r}`;
+        break;
+      case 'sin': {
+        // radians: only whole and simple parts of π come out exact
+        const deg = n.isZero ? 0 : n.p === 1 && 180 % n.d === 0 ? ((((n.n * 180) / n.d) % 360) + 360) % 360 : null;
+        const exact = deg !== null ? EXACT_SIN[deg] : undefined;
+        if (!exact) return refuse(`sin ${n} never ends`);
+        r = Q.of(exact[0] * a, exact[1]);
+        t = `${ka}sin ${n} = ${r}`;
+        break;
+      }
+      case 'ln':
+        if (!n.eq(Q.ONE)) return refuse(n.sign <= 0 ? `ln ${n} is undefined` : `ln ${n} never ends`);
+        r = Q.ZERO;
+        t = 'ln 1 = 0';
+        break;
+    }
+    if (!r) return;
+    if (r.unwieldy) return refuse('too large to hold');
+    if (e.solid || e.armored || e.kind === 'whole') {
+      if (r.isZero) return refuse('· · ·');
+    }
+    said(t);
+    if (r.isZero) {
       this.kill(e);
       return;
     }
-    this.sfx.blocked();
-    this.float(`ln ${e.n} never ends`, e.cx, e.y - 14, 15);
+    const turned = r.sign !== n.sign;
+    e.n = r;
+    e.label = null;
+    e.popT = 1;
+    e.hurtT = 0.1;
+    e.resize();
+    this.sfx.hit(Math.min(9, Math.abs(r.approx)));
+    if (turned) {
+      e.turnT = 1;
+      this.sfx.turn();
+    }
   }
 
   /** x and the curves: land on a graph from above, or keep standing on it as it moves. */
   private standOnCurves(prevFeet: number): void {
     const p = this.player;
+    const feet = p.y + p.h;
+    // a function floor is ground: x is never beneath it, and is carried as it moves
+    const ff = this.funcFloor;
+    if (ff) {
+      const y = ff.yAt(p.cx);
+      if (y !== null) {
+        const riding = this.onCurve === ff.curve && p.vy >= 0;
+        if (feet > y || riding || (prevFeet <= y + 2 && feet >= y - 0.5 && p.vy >= 0)) {
+          p.y = y - p.h;
+          if (p.vy > 0) p.vy = 0;
+          p.onGround = true;
+          this.onCurve = ff.curve;
+          return;
+        }
+      }
+    }
     if (this.curveDrop > 0 || p.vy < 0 || p.dashing) {
       if (p.vy < 0) this.onCurve = null;
       return;
     }
-    const feet = p.y + p.h;
     let best: number | null = null;
     let hit: Curve | null = null;
     for (const c of this.curves) {
       const y = c.yAt(p.cx, this.time);
       if (y === null) continue;
-      // keep to the graph x stands on: up a step of up to 34px, or down a slope of up to 12px a frame
-      const standing = this.onCurve === c && feet <= y + 34 && feet >= y - 12;
       const crossing = prevFeet <= y + 2 && feet >= y - 0.5;
-      // walking along the ground into a graph that begins a step above: step onto it
-      const stepping = p.onGround && feet - y >= 0 && feet - y <= 34;
-      if ((standing || crossing || stepping) && (best === null || y < best)) {
+      let ok: boolean;
+      if (c.flat) {
+        // ⌊x⌋: each floor is flat, and nothing joins it to the next
+        ok = crossing || (this.onCurve === c && Math.abs(feet - y) <= 2);
+      } else {
+        // keep to the graph x stands on: up a step of up to 34px, or down a slope of up to 12px a frame
+        const standing = this.onCurve === c && feet <= y + 34 && feet >= y - 12;
+        // walking along the ground into a graph that begins a step above: step onto it
+        const stepping = p.onGround && feet - y >= 0 && feet - y <= 34;
+        ok = standing || crossing || stepping;
+      }
+      if (ok && (best === null || y < best)) {
         best = y;
         hit = c;
       }
@@ -1047,6 +1339,90 @@ export class Game {
       p.onGround = true;
       this.onCurve = hit;
     } else this.onCurve = null;
+  }
+
+  /** Is this point inside the ground of a function floor? */
+  private underFloor(x: number, y: number): boolean {
+    const fy = this.funcFloor?.yAt(x) ?? null;
+    return fy !== null && y > fy + 3;
+  }
+
+  /** x's function meets rock: at a mouth, if it is the rule carved there, the rock takes it in. */
+  private tryHole(c: CurveShot): boolean {
+    const hd = c.head;
+    for (const h of this.holes) {
+      if (h.done || Math.abs(hd.x - h.x) > 30) continue;
+      // where its path crosses the rock face, and how far it had come
+      const run = (h.x - c.x0) * c.dir;
+      const yAtFace = c.y0 - c.g(Math.max(0, run));
+      if (run < -20 || Math.abs(yAtFace - h.y) > 22) continue;
+      if (c.fn === h.fn && c.a === h.a && c.dir === h.dir && (c.fn === 'ax' || run < 40)) {
+        // a line is the same line wherever it is met; the others must begin at the mouth
+        c.restartAt(h.x, h.y);
+        c.hole = h;
+        h.lit = 1;
+        this.sfx.tone(523, 0.9, { vol: 0.07, wet: 0.7 });
+        return true;
+      }
+      this.sfx.blocked();
+      this.float('it does not fit', h.x - h.dir * 24, h.y - 28, 16);
+      return false;
+    }
+    return false;
+  }
+
+  /** A rule has run its channel to the end: the room's lock opens. */
+  private holeRun(h: Hole): void {
+    h.done = true;
+    h.lit = 1;
+    if (!this.save.opened.includes(h.key)) this.save.opened.push(h.key);
+    const end = { x: h.x + h.dir * h.len * TILE, y: h.y - h.g(h.len * TILE) };
+    this.fx.burst(end.x, end.y, 24, { speed: 220, life: 0.7, line: true });
+    this.openLocks(fnLabel(h.fn, h.a));
+  }
+
+  private openLocks(said: string): void {
+    for (const e of this.enemies) {
+      if (!e.lock || e.dead) continue;
+      this.openGate(e);
+      this.hitstop(0.2);
+      this.float(said, e.cx, e.y - 44, 22);
+    }
+    writeSave(this.save);
+  }
+
+  /**
+   * A root of the ground, struck or shot: where the graph meets nothing,
+   * it can be broken. True if one was.
+   */
+  private breakRootsNear(x: number, y: number, r: number, box?: { x: number; y: number; w: number; h: number }): boolean {
+    const ff = this.funcFloor;
+    if (!ff) return false;
+    const cyc = this.floorCycle;
+    const open = this.boss ? !!this.boss.rootsOpen : cyc.need > cyc.broken;
+    if (!open) return false;
+    for (const rx of ff.roots()) {
+      const hit = box ? rectCircle(box, rx, ff.oy, 9) : Math.hypot(rx - x, ff.oy - y) < r + 6;
+      if (!hit) continue;
+      if (this.boss?.rootBroken) {
+        this.float(this.boss.rootBroken(rx), rx, ff.oy - 44, 22);
+        return true;
+      }
+      cyc.broken++;
+      this.float(`f(${rootText((rx - ff.ox) / TILE)}) = 0`, rx, ff.oy - 44, 22);
+      this.fx.burst(rx, ff.oy, 20, { speed: 240, life: 0.6, line: true });
+      this.sfx.crack();
+      this.shake(6);
+      this.hitstop(0.1);
+      this.reward(0.2);
+      if (cyc.broken >= cyc.need) this.openLocks('f(x) = 0');
+      // broken, the ground is rewritten at once
+      cyc.i = (cyc.i + 1) % PRACTICE_FORMS.length;
+      ff.morph(PRACTICE_FORMS[cyc.i], 0.6, 0.9);
+      cyc.t = cyc.every;
+      return true;
+    }
+    return false;
   }
 
   /** A whole struck with a whole number k breaks into k equal pieces. */
@@ -1146,8 +1522,10 @@ export class Game {
       this.hitstop(0.04);
     };
     if (e.ePow !== null) return blocked(`e${sup(e.ePow)} − ${v} never ends`);
+    if (e.kind === 'spinner') return blocked('an angle is not a number');
     if (e.kind === 'door') {
       // A door yields to its own number: strike it, or equate beside it.
+      if (e.lock) return blocked(this.lockSays(e));
       if (e.needsPoints) return blocked('stand where it says');
       if (e.opensTo(v)) return this.openDoor(e);
       return blocked(e.sign ? '≠' : `${v} ≠ ${e.n}`);
@@ -1283,19 +1661,39 @@ export class Game {
           p.wantStrike = true;
           break;
         case 'op':
-          this.onOp(e.op);
+          if (this.aiming) this.sfx.refuse();
+          else this.onOp(e.op);
           break;
         case 'digit':
-          this.onDigit(e.d);
+          if (this.aiming) {
+            // while F is held, a digit is a
+            if (e.d === 0) {
+              this.sfx.refuse();
+              this.float(this.fn === '⌊x⌋' ? '⌊x⌋ to nothing' : this.fn === 'x²' ? 'x²/0 is undefined' : `${fnLabel(this.fn, 1).replace(/\d*x/, '0x')} draws nothing`);
+            } else {
+              this.aiming.a = e.d;
+              this.sfx.composed(e.d);
+            }
+          } else this.onDigit(e.d);
           break;
         case 'equate':
           this.onEquate();
           break;
         case 'fire':
-          this.fireFunction();
+          this.beginAim();
+          break;
+        case 'fireUp':
+          this.releaseAim();
           break;
         case 'cycle':
           this.cycleFunction();
+          break;
+        case 'down':
+          // while aiming, S turns the rule over
+          if (this.aiming && this.fn !== '⌊x⌋') {
+            this.aiming.flip = !this.aiming.flip;
+            this.sfx.compose();
+          }
           break;
         default:
           break;
@@ -1310,7 +1708,8 @@ export class Game {
       this.compose.t += realDt;
       if (this.compose.t > 1.3) this.compose = null;
     }
-    const wantSlow = !!this.compose || this.input.down('focus');
+    if (this.aiming && !this.input.down('fn')) this.releaseAim();
+    const wantSlow = !!this.compose || !!this.aiming || this.input.down('focus');
     const slow = wantSlow && this.meter > 0;
     if (slow) this.meter = Math.max(0, this.meter - realDt * 0.42);
     else this.meter = Math.min(1, this.meter + realDt * 0.09);
@@ -1340,6 +1739,20 @@ export class Game {
 
     const dt = realDt * this.timeScale;
     const prevFeet = p.y + p.h;
+    const ff = this.funcFloor;
+    if (ff) {
+      ff.update(dt);
+      const cyc = this.floorCycle;
+      if (cyc.every > 0) {
+        // the practice room rewrites its ground, again and again
+        cyc.t -= dt;
+        if (cyc.t <= 0 && ff.settled) {
+          cyc.t = cyc.every;
+          cyc.i = (cyc.i + 1) % PRACTICE_FORMS.length;
+          ff.morph(PRACTICE_FORMS[cyc.i], 1.3, 1);
+        }
+      }
+    }
     p.update(dt, this.input, this.room, this.sfx);
     this.standOnCurves(prevFeet);
     for (const c of this.curves) c.life -= dt;
@@ -1362,6 +1775,7 @@ export class Game {
       plot: (x, y, path, tx, ty) => this.plot(x, y, path, tx, ty),
     };
     for (const e of this.enemies) e.update(dt, world);
+    for (const h of this.holes) if (!h.done) h.lit = Math.max(0, h.lit - dt * 1.5);
     this.boss?.update(dt);
 
     for (const s of this.shots) {
@@ -1373,7 +1787,7 @@ export class Game {
         this.fx.burst(s.x, s.y, 10, { speed: 160, life: 0.4, line: true });
         continue;
       }
-      if (s.life <= 0 || this.room.solidAtPx(s.x, s.y)) {
+      if (s.life <= 0 || this.room.solidAtPx(s.x, s.y) || this.underFloor(s.x, s.y)) {
         s.dead = true;
         this.fx.burst(s.x, s.y, 4, { speed: 80, life: 0.3 });
       }
@@ -1384,30 +1798,49 @@ export class Game {
       c.update(dt);
       if (c.dead || c.tele > 0) continue;
       const hd = c.head;
-      if (c.u > 10 && this.room.solidAtPx(hd.x, hd.y)) {
-        c.dead = true;
-        this.fx.burst(hd.x, hd.y, 6, { speed: 100, life: 0.3 });
+      const hole = c.hole as Hole | null;
+      if (hole) {
+        // a rule running its own channel through the rock
+        hole.lit = Math.max(hole.lit, 0.9);
+        if (c.u >= hole.len * TILE) {
+          c.dead = true;
+          this.holeRun(hole);
+        }
         continue;
       }
-      if (hd.y > this.room.ph + 40) c.dead = true;
+      if (this.room.solidAtPx(hd.x, hd.y)) {
+        if (c.friendly && this.tryHole(c)) continue;
+        if (c.u > 4 || !c.friendly) {
+          c.dead = true;
+          this.fx.burst(hd.x, hd.y, 6, { speed: 100, life: 0.3 });
+          continue;
+        }
+      }
+      if (hd.y > this.room.ph + 40 || hd.y < -200 || hd.x < -40 || hd.x > this.room.pw + 40 || this.underFloor(hd.x, hd.y)) {
+        c.dead = true;
+        continue;
+      }
       const r = c.friendly ? 12 : 8;
       const box = { x: hd.x - r, y: hd.y - r, w: r * 2, h: r * 2 };
-      if (c.friendly) {
+      if (c.friendly && c.fn) {
+        if (this.breakRootsNear(hd.x, hd.y, 16)) {
+          c.dead = true;
+          continue;
+        }
         for (const e of this.enemies) {
           if (e.dead || e.appear < 1 || !overlaps(box, e.hitbox())) continue;
           c.dead = true;
-          if (c.path === 'ln') this.lnHit(e);
-          else if (c.value) this.strike(e, c.value);
+          this.applyFn(e, c.fn, c.a);
           break;
         }
-        if (!c.dead && this.boss) {
-          const said = c.path === 'ln' ? this.boss.ln?.(hd.x, hd.y, r) : c.value ? this.boss.hit(box, c.value) : undefined;
+        if (!c.dead && this.boss?.fnHit) {
+          const said = this.boss.fnHit(c.fn, c.a, hd.x, hd.y, r);
           if (said !== undefined) {
             c.dead = true;
-            if (said) this.float(said, this.boss.x, this.boss.y - this.boss.r - 18, 18);
+            if (said) this.floatAtBoss(said);
           }
         }
-      } else if (p.invuln <= 0 && !p.dashing && rectCircle({ x: p.x + 2, y: p.y + 2, w: p.w - 4, h: p.h - 2 }, hd.x, hd.y, 6)) {
+      } else if (!c.friendly && p.invuln <= 0 && !p.dashing && rectCircle({ x: p.x + 2, y: p.y + 2, w: p.w - 4, h: p.h - 2 }, hd.x, hd.y, 6)) {
         c.dead = true;
         this.hurtPlayer(hd.x);
       }
@@ -1454,13 +1887,17 @@ export class Game {
         this.fx.burst(hd.x, hd.y, 8, { speed: 160, life: 0.35, line: true });
         this.sfx.hit(1);
       }
+      if (!p.struck.has(this.floorCycle) && this.breakRootsNear(box.x + box.w / 2, box.y + box.h / 2, 0, box)) {
+        p.struck.add(this.floorCycle);
+        struck = true;
+      }
       const boss = this.boss;
       if (boss && p.value && !p.struck.has(boss)) {
         const msg = boss.hit(box, p.value);
         if (msg !== undefined) {
           p.struck.add(boss);
           if (msg) {
-            this.float(msg, boss.x, boss.y - boss.r - 18, 18);
+            this.floatAtBoss(msg);
             p.recoil(boss.x, 220);
           }
           struck = true;
@@ -1493,7 +1930,11 @@ export class Game {
     // fallen digits: touch one and it joins x by the last sign used
     for (const d of this.drops) {
       d.t += dt;
-      if (!groundAt(this.room, d.x, d.y + 8)) {
+      const fy = this.funcFloor?.yAt(d.x) ?? null;
+      if (fy !== null && d.y + 8 >= fy) {
+        d.y = fy - 8;
+        d.vy = 0;
+      } else if (!groundAt(this.room, d.x, d.y + 8)) {
         d.vy = Math.min(600, d.vy + 1200 * dt);
         d.y += d.vy * dt;
       } else d.vy = 0;
@@ -1742,6 +2183,12 @@ export class Game {
     ctx.globalAlpha = 0.65;
     ctx.stroke(r.platforms());
     ctx.globalAlpha = 1;
+    for (const h of this.holes) this.drawHole(h);
+    const ff = this.funcFloor;
+    if (ff) {
+      ff.draw(ctx, this.time, this.boss ? !!this.boss.rootsOpen : this.floorCycle.need > this.floorCycle.broken);
+      if (!this.boss) ff.drawLabel(ctx, ff.ox, 2 * TILE + 8, 20, 0.7);
+    }
     for (const c of this.curves) c.draw(ctx, this.time);
 
     // inscriptions
@@ -1872,6 +2319,7 @@ export class Game {
     ctx.globalAlpha = 1;
 
     if (this.mode !== 'dead') this.player.draw(ctx, this.time);
+    if (this.aiming && this.mode === 'play') this.drawAim();
 
     // slowed time: a ring of attention
     if (this.timeScale < 0.95 && this.mode === 'play') {
@@ -1920,6 +2368,92 @@ export class Game {
     ctx.drawImage(pal.inverted ? this.vignettes.light : this.vignettes.dark, 0, 0);
   }
 
+  /** A rule carved in rock: a groove shaped like its graph, from its mouth to a ring at its end. */
+  private drawHole(h: Hole): void {
+    const ctx = this.ctx;
+    const L = h.len * TILE;
+    const path = new Path2D();
+    for (let u = 0; u <= L + 0.01; u += 3) {
+      const x = h.x + h.dir * Math.min(u, L);
+      const y = h.y - h.g(Math.min(u, L));
+      if (u === 0) path.moveTo(x, y);
+      else path.lineTo(x, y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = pal.air;
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.stroke(path);
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = pal.ink;
+    ctx.lineWidth = h.done ? 1.6 : 1;
+    ctx.globalAlpha = h.done ? 0.75 : 0.3 + 0.6 * h.lit;
+    if (!h.done) ctx.setLineDash([4, 5]);
+    ctx.stroke(path);
+    ctx.setLineDash([]);
+    const ex = h.x + h.dir * L;
+    const ey = h.y - h.g(L);
+    ctx.globalAlpha = h.done ? 0.8 : 0.45 + 0.2 * Math.sin(this.time * 2.5);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    if (h.done) {
+      ctx.fillStyle = pal.ink;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // the mouth: two marks on the rock face
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(h.x, h.y - 9);
+    ctx.lineTo(h.x - h.dir * 5, h.y - 9);
+    ctx.moveTo(h.x, h.y + 9);
+    ctx.lineTo(h.x - h.dir * 5, h.y + 9);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /** While F is held: the graph x is about to fire, drawn from the hand, and what it is called. */
+  private drawAim(): void {
+    const ctx = this.ctx;
+    const p = this.player;
+    const a = this.aimA;
+    const dir = p.facing;
+    ctx.strokeStyle = pal.ink;
+    ctx.fillStyle = pal.ink;
+    if (this.fn === '⌊x⌋') {
+      const fx = p.cx;
+      const fy = p.y + p.h;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      for (let k = 1; k <= a; k++) {
+        ctx.beginPath();
+        ctx.moveTo(fx + dir * k * TILE, fy - k * TILE);
+        ctx.lineTo(fx + dir * (k + 1) * TILE, fy - k * TILE);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    } else {
+      const h = this.hand;
+      const g = shapePx(this.fn, a);
+      let inRock = 0;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 6]);
+      strokePath(ctx, g, h.x, h.y, dir, 0, 1100, (x, y) => {
+        inRock = this.room.solidAtPx(x, y) || this.underFloor(x, y) ? inRock + 1 : 0;
+        return inRock > 6 || y < -100 || y > this.room.ph + 100;
+      });
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 0.9;
+    drawRich(ctx, fnLabel(this.fn, a), p.cx, p.y - 30, 19);
+    ctx.globalAlpha = 1;
+  }
+
   private drawLight(camX: number, camY: number): void {
     const l = this.lctx;
     const dark = this.room.def.dark ?? (pal.inverted ? 0.8 : 0.84);
@@ -1952,6 +2486,11 @@ export class Game {
       add(hd.x, hd.y, c.tele > 0 ? 40 : 70, 0.6);
     }
     for (const pt of this.points) if (pt.lit) add(pt.x, pt.y, 120, 0.7);
+    for (const h of this.holes) {
+      add(h.x, h.y, 120, 0.45);
+      if (h.lit > 0) add(h.x + h.dir * h.len * TILE, h.y - h.g(h.len * TILE), 120, 0.5 * h.lit);
+    }
+    if (this.funcFloor) for (const rx of this.funcFloor.roots()) add(rx, this.funcFloor.oy, 110, 0.55);
     for (const t of this.texts) if (t.a > 0) add(t.x, t.y, 200, t.a * 0.6);
     this.boss?.lights(add);
     this.ctx.drawImage(this.light, 0, 0, VIEW_W, VIEW_H);
@@ -2036,9 +2575,18 @@ export class Game {
         if (sel) ctx.fillRect(fxPos, VIEW_H - 18, w, 1);
         fxPos += w + 16;
       }
-      ctx.globalAlpha = 0.25;
-      ctx.font = serif(13, { italic: false, weight: 500 });
-      ctx.fillText('F  ·  Q', 40, VIEW_H - 56);
+      if (this.aiming) {
+        ctx.globalAlpha = 0.9;
+        ctx.textAlign = 'center';
+        const label = fnLabel(this.fn, this.aimA);
+        ctx.font = serif(21);
+        const w = ctx.measureText(label).width;
+        drawRich(ctx, label, 40 + w / 2, VIEW_H - 60, 21);
+      } else {
+        ctx.globalAlpha = 0.25;
+        ctx.font = serif(13, { italic: false, weight: 500 });
+        ctx.fillText('hold F  ·  Q', 40, VIEW_H - 56);
+      }
       ctx.textAlign = 'center';
     }
     // the sign that fallen digits join x by
@@ -2151,12 +2699,15 @@ export class Game {
       ...(this.has('√') ? ([['√', 'then a digit      R  ·  √ 2 is the square root']] as [string, string][]) : []),
       ...(this.has('±') ? ([['the opposite', '−  then  −']] as [string, string][]) : []),
       ['equate', 'Enter   ·   =      (when the circle is full)'],
-      ...(this.learnedFunctions().length ? ([['function', 'F  fires  ·  Q  chooses  ·  W / S aim']] as [string, string][]) : []),
+      ...(this.learnedFunctions().length
+        ? ([['function', 'hold F  ·  a digit is a  ·  let go      S turns it over  ·  Q chooses']] as [string, string][])
+        : []),
       ['slow time', 'L   ·   Num .'],
       ['return', 'Esc'],
     ];
+    const gap = rows.length > 12 ? 25 : 28;
     rows.forEach(([a, b], i) => {
-      const y = 112 + i * 28;
+      const y = 108 + i * gap;
       ctx.globalAlpha = 0.45;
       ctx.font = serif(18);
       ctx.textAlign = 'right';
@@ -2170,9 +2721,11 @@ export class Game {
     ctx.globalAlpha = 0.4;
     ctx.font = serif(16);
     const rule =
-      this.chapter === 2
-        ? 'Past zero, numbers turn negative. Hold the opposite to undo them.'
-        : 'You cannot take more than there is.   The bound can only be shared.';
+      this.chapter === 3
+        ? 'A function changes what it touches.   A graph breaks where it meets nothing.'
+        : this.chapter === 2
+          ? 'Past zero, numbers turn negative. Hold the opposite to undo them.'
+          : 'You cannot take more than there is.   The bound can only be shared.';
     ctx.fillText(rule, VIEW_W / 2, 490);
     ctx.globalAlpha = 1;
   }

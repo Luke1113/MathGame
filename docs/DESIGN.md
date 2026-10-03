@@ -87,22 +87,28 @@ Below zero, **the world is drawn in negative**: black ink on white. Negative num
 
 ### Chapter III — Functions *(high school)* — **playable**
 
-Linear functions, the sine, the parabola, the floor function, exponential growth and logarithms.
+Linear functions, the parabola, the floor function, angles and the sine, exponential growth and logarithms, roots.
 
-Drawn as a **blueprint**: cold ink on near-black, with ruled graph-paper lines (bolder every fifth).
+Drawn as a **blueprint**: cold ink on near-black, with ruled graph-paper lines (bolder every fifth). One square of the paper is one unit, so every graph can be read by counting squares.
 
-- Rooms: *the graph → the wave → the arc → the floor → the wall → doubling → the slow → the root → e*
-- **Functions are weapons.** `F` fires the chosen function, `Q` chooses. A function's shot strikes whatever it meets with x, by the same exact-kill rule. Where it makes sense, x is also the function's parameter, so choosing x chooses a shape:
-  - **ax** — a beam, aimed straight, up or down.
-  - **sin** — a weaving wave of height x; negative x turns it over.
-  - **x²** — a lob whose arc is x tall (negative x throws downward).
-  - **⌊x⌋** — builds ⌊x⌋ one-tile steps (at most 6). A nine-tile wall can only be climbed on them: hold at least 5.
-  - **ln** — carries no x. It counts growth back: e^k becomes the plain number k, and ln 1 = 0 undoes a 1. Anything else "never ends".
-- **Graphs are terrain.** Standing surfaces defined by functions: a line ramp, a moving sine wave over a pit (ride it), a parabolic bowl. You can step onto a graph from the ground.
-- **Telegraphs are graphs.** Plotters show the sine or parabola they will fire along before they fire.
-- **Enemies:** plotters; doublers (1, 2, 4, 8, …, bursting past 128); e-forms (e², e³) that no number can lessen until ln counts them back; a gate of e³.
+Every room is practice for the rule at the end: what a shape is called, what a function does to a number, how to stand on ground that is rewritten, and where a graph meets nothing.
+
+- Rooms: *the graph → the arc → the floor → the wave → counting back → growth (e) → rewritten → the root → f(x)*
+- **Aiming.** Hold `F`: time slows and the chosen function is drawn from x's hand with its equation. A digit sets its parameter a; `S` turns it over; letting go fires it along exactly that graph. The shapes, in squares of the paper: `y = ax`, `y = a sin x`, `y = x²/a`, `y = a ln(x + 1)`.
+- **The transform rule.** A function applies itself to the number it touches: f(n). Zero undoes the enemy; anything else becomes its new number, which melee still takes away exactly. So a function turns a number into one x can undo:
+  - **ax** multiplies (1/3 → 1 with a = 3; turns an angle further, 45° → 90° with a = 2).
+  - **x²** squares and divides by a ((−3)²/9 = 1). Of growth, (e^k)² = e^2k.
+  - **sin** takes the sine. Exact only at 0°, 30°, 90°, 150°, 180°, 210°, 270°, 330° (and the matching multiples of π): `3 sin 90° = 3`, `sin 180° = 0`. Anything else never ends. What ln is to e, sin is to θ.
+  - **ln** counts growth back: e^k becomes ak; ln 1 = 0.
+  - **⌊x⌋** is never fired: it draws the true graph of y = ⌊x⌋ from x's feet, a steps high — flat floors one unit wide, each a unit above the last, with a closed dot where each begins and an open one where it ends. No risers join them, so each is jumped to. A nine-high wall is climbed this way.
+- **Holes.** Rules carved in rock: a groove shaped like a graph (`y = 2x`, `y = x²/3`, `y = −sin x`) runs from a mouth into the rock. A shot of exactly that rule, fired with the hand at the mouth (or, for a line, met anywhere along it), runs the groove and opens the room's lock. Nothing else can reach the end.
+- **θ — spinners.** Angles that turn 15° at a time and fire along each axis they pass. A strike can't touch an angle; its sine can.
+- **Graphs are terrain.** A parabolic bowl over a pit; a sine wave that moves, to be ridden up to a high shrine; in *rewritten*, a floor that is itself a graph, rewritten every few seconds (lines and parabolas). Ground beneath a function floor is solid: x is carried as it rises and falls, never dropped through. Its roots — where it crosses the axis — show once it is still, and break to a strike or a shot. Two roots open the way on.
+- **Telegraphs are graphs.** Plotters show the line, sine or parabola they will fire along before they fire.
+- **Enemies:** plotters; doublers (2, 4, 8, … bursting past 128); e-forms that no number can lessen until ln counts them back; a gate of e³; spinners.
 - **One equation door:** `x² = 16`, which opens to either root, 4 or −4.
-- **Boss: e, "the number that grows by what it is."** It grows a power every few seconds (e¹, e², … e⁷, then bursts and begins again). Small, it darts and is hard to catch; grown, it is slow and dangerous. Only ln counts it back, to the plain number k, which must then be struck exactly to zero. Each phase it starts from a greater power, and from the second phase it also lobs parabolas. At the end it counts itself down, e³, e², e¹, e⁰ = 1, and x equates: 1 = 1. x receives e.
+- **e, met on the way — "the number that grows by what it is."** It grows a power every few seconds; small, it darts. ln counts it back to a plain number, which is struck to zero. Twice, and it counts itself down to e⁰ = 1 and is taken, like a glyph.
+- **Boss: f(x), "the rule beneath everything."** Its graph is the floor of its room. It rewrites itself — showing the next form as a dashed graph before the ground moves — fires along graphs, and calls angles and doublings into the fight. It breaks only at its roots; each root broken rewrites it at once. Four families: lines (3 roots), parabolas (3; one has none and must be waited out or bent), sines whose phase moves with time (4), and growth, e^(x/3), which has no roots at all until ln counts it back to x/3 (2). x's functions compose with it: ln counts growth back, ax stretches it, sin bends it into a wave with roots of its own. At the end it is rewritten one last time, as f(x) = 0, and x, holding 0, equates: 0 = 0.
 
 ### Chapter IV — Calculus
 

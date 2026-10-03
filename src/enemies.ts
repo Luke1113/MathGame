@@ -1,10 +1,35 @@
-import { clamp, pal, Rect, TILE } from './constants';
+import { clamp, pal, Rect, serif, TILE } from './constants';
 import { drawQ, drawRich, qWidth } from './draw';
 import { Q } from './num';
 import { groundAt, moveBody, type Body } from './physics';
 import type { Room } from './room';
 
-export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'orbiter' | 'bound' | 'gate' | 'door' | 'whole' | 'piece' | 'wedge' | 'plotter' | 'doubler';
+export type EnemyKind =
+  | 'walker'
+  | 'drifter'
+  | 'emitter'
+  | 'orbiter'
+  | 'bound'
+  | 'gate'
+  | 'door'
+  | 'whole'
+  | 'piece'
+  | 'wedge'
+  | 'plotter'
+  | 'doubler'
+  | 'spinner';
+
+/** Sines that come out exact, by the degree. */
+export const EXACT_SIN: Record<number, [number, number]> = {
+  0: [0, 1],
+  30: [1, 2],
+  90: [1, 1],
+  150: [1, 2],
+  180: [0, 1],
+  210: [-1, 2],
+  270: [-1, 1],
+  330: [-1, 2],
+};
 
 export interface World {
   room: Room;
@@ -12,7 +37,7 @@ export interface World {
   py: number;
   shoot(x: number, y: number, vx: number, vy: number): void;
   /** Fire along a graph toward (tx, ty), after showing it. */
-  plot(x: number, y: number, path: 'sin' | 'para', tx: number, ty: number): void;
+  plot(x: number, y: number, path: 'line' | 'sin' | 'para', tx: number, ty: number): void;
 }
 
 export class Enemy implements Body {
@@ -38,7 +63,7 @@ export class Enemy implements Body {
   /** Other numbers a door also opens to (both roots of x² = 16). */
   alts: Q[] = [];
   /** A plotter's graph: the curve it draws before firing along it. */
-  curve: 'sin' | 'para' = 'sin';
+  curve: 'line' | 'sin' | 'para' = 'sin';
   private plotT = 2 + Math.random();
   private growT = 3;
   /** Wedges of a slice: attached to the circle until they break away. */
@@ -51,6 +76,13 @@ export class Enemy implements Body {
   sign: string | null = null;
   /** For doors in the plane: opened by standing at points, not by a number. */
   needsPoints = false;
+  /** A lock: opened from within the rock by a function that fits, or by roots. */
+  lock = false;
+  /** A spinner is an angle, θ, in degrees: it turns by a step, again and again. */
+  deg = 0;
+  degStep = 15;
+  degEvery = 0.55;
+  private degT = 0.55;
   dead = false;
   t = Math.random() * 10;
   dir: 1 | -1 = -1;
@@ -89,7 +121,7 @@ export class Enemy implements Body {
   }
   /** Does this door open to x = v? */
   opensTo(v: Q): boolean {
-    return this.ePow === null && (this.n.eq(v) || this.alts.some((a) => a.eq(v)));
+    return !this.lock && this.ePow === null && (this.n.eq(v) || this.alts.some((a) => a.eq(v)));
   }
 
   get negative(): boolean {
@@ -125,6 +157,8 @@ export class Enemy implements Body {
       this.w = this.h = 30 + 6 * d;
     } else if (this.kind === 'doubler') {
       this.w = this.h = 26 + 8 * d;
+    } else if (this.kind === 'spinner') {
+      this.w = this.h = 44;
     } else if (this.kind === 'bound') {
       this.w = 26 + 10 * d;
       this.h = 32;
@@ -134,7 +168,7 @@ export class Enemy implements Body {
   }
 
   private get floats(): boolean {
-    return ['drifter', 'emitter', 'orbiter', 'whole', 'piece', 'wedge', 'plotter', 'doubler'].includes(this.kind);
+    return ['drifter', 'emitter', 'orbiter', 'whole', 'piece', 'wedge', 'plotter', 'doubler', 'spinner'].includes(this.kind);
   }
 
   hitbox(): Rect {
@@ -218,6 +252,21 @@ export class Enemy implements Body {
       case 'piece':
         this.drift(dt, w, dx, dy, haste);
         break;
+      case 'spinner': {
+        // an angle that turns; whenever it points along an axis, it fires that way
+        this.drift(dt, w, dx, dy, 0.55);
+        this.degT -= dt;
+        if (this.degT <= 0) {
+          this.degT = this.degEvery;
+          this.deg = (((this.deg + this.degStep) % 360) + 360) % 360;
+          this.popT = 0.4;
+          if (this.deg % 90 === 0) {
+            const r = (this.deg * Math.PI) / 180;
+            w.shoot(this.cx + Math.cos(r) * 22, this.cy - Math.sin(r) * 22, Math.cos(r) * 190, -Math.sin(r) * 190);
+          }
+        }
+        break;
+      }
       case 'doubler':
         // growth that grows: twice itself, again and again
         this.drift(dt, w, dx, dy, haste);
@@ -350,9 +399,53 @@ export class Enemy implements Body {
       ctx.moveTo(cx + gap, this.y);
       ctx.lineTo(cx + gap, this.y + this.h);
       ctx.stroke();
+      if (this.lock) {
+        // a lock: it has no number, only a keyhole
+        ctx.globalAlpha = a * 0.7;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(cx, cy - 6, 4, 0, Math.PI * 2);
+        ctx.moveTo(cx, cy - 2);
+        ctx.lineTo(cx, cy + 9);
+        ctx.stroke();
+      }
       ctx.globalAlpha = a * (0.55 + 0.25 * Math.sin(this.t * 1.5));
       if (this.sign) drawRich(ctx, this.sign, cx, this.y - 16, 21);
-      else drawQ(ctx, this.n, cx, this.y - 16, 22);
+      else if (!this.lock) drawQ(ctx, this.n, cx, this.y - 16, 22);
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    if (this.kind === 'spinner') {
+      // θ: a circle of radius one, and the angle it has turned through
+      const r = 17;
+      const ang = (this.deg * Math.PI) / 180;
+      ctx.lineWidth = 1.2;
+      ctx.globalAlpha = a * 0.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.moveTo(cx - r - 4, cy);
+      ctx.lineTo(cx + r + 4, cy);
+      ctx.stroke();
+      ctx.globalAlpha = a * 0.3;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, 8, 0, -ang, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = a;
+      ctx.lineWidth = flash ? 3 : 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(ang) * r, cy - Math.sin(ang) * r);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(ang) * r, cy - Math.sin(ang) * r, 2.5 + this.popT * 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = serif(15 + this.popT * 4, { weight: 600 });
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${this.deg}°`, cx, cy + r + 12);
       ctx.globalAlpha = 1;
       return;
     }

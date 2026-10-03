@@ -1,36 +1,117 @@
-import { pal } from './constants';
-import { drawQ } from './draw';
-import type { Q } from './num';
-
-export type ShotPath = 'line' | 'sin' | 'para' | 'ln';
+import { pal, serif, TILE } from './constants';
 
 /**
- * A shot that flies along a graph. x's functions carry x along them; plotters
- * (and e) fire them at x, after drawing the curve they will follow.
+ * x's functions as shapes on the graph paper: the height (in tiles, up is
+ * positive) a shot has risen after a run of u tiles from x's hand. The digit
+ * held with F is a; holding S turns it negative.
+ */
+export const SHAPES: Record<string, (u: number, a: number) => number> = {
+  ax: (u, a) => a * u,
+  sin: (u, a) => a * Math.sin(u),
+  'x²': (u, a) => (u * u) / a,
+  ln: (u, a) => a * Math.log(u + 1),
+};
+
+/** The same shape in pixels: height above the start after a run of u px. */
+export function shapePx(fn: string, a: number): (u: number) => number {
+  const s = SHAPES[fn];
+  return (u) => s(u / TILE, a) * TILE;
+}
+
+/** How a function is written with its a: y = 2x, y = −3 sin x, y = x²/3. */
+export function fnLabel(fn: string, a: number): string {
+  const s = a < 0 ? '−' : '';
+  const m = Math.abs(a);
+  const k = m === 1 ? '' : String(m);
+  switch (fn) {
+    case 'ax':
+      return `y = ${s}${k}x`;
+    case 'sin':
+      return `y = ${s}${k ? k + ' ' : ''}sin x`;
+    case 'x²':
+      return `y = ${s}x²${k ? '/' + k : ''}`;
+    case 'ln':
+      return `y = ${s}${k ? k + ' ' : ''}ln(x + 1)`;
+    case '⌊x⌋':
+      return `y = ⌊x⌋,  x < ${m + 1}`;
+    default:
+      return fn;
+  }
+}
+
+/**
+ * Walk a path y0 − g(u) by arc length: the run u reached after travelling
+ * `len` pixels along it from run `from`.
+ */
+export function runAfter(g: (u: number) => number, from: number, len: number): number {
+  let u = from;
+  let left = len;
+  for (let i = 0; i < 600 && left > 0.01; i++) {
+    const slope = g(u + 0.5) - g(u - 0.5);
+    const k = Math.sqrt(1 + slope * slope);
+    const du = Math.min(3, left / k);
+    u += du;
+    left -= du * k;
+  }
+  return u;
+}
+
+/** Stroke a path from run `from`, for `len` pixels of its length, stopping where `stop` says. */
+export function strokePath(
+  ctx: CanvasRenderingContext2D,
+  g: (u: number) => number,
+  x0: number,
+  y0: number,
+  dir: number,
+  from: number,
+  len: number,
+  stop?: (x: number, y: number) => boolean,
+): void {
+  ctx.beginPath();
+  let u = from;
+  let gone = 0;
+  ctx.moveTo(x0 + dir * u, y0 - g(u));
+  for (let i = 0; i < 400 && gone < len; i++) {
+    const nu = runAfter(g, u, 6);
+    gone += 6;
+    u = nu;
+    const x = x0 + dir * u;
+    const y = y0 - g(u);
+    ctx.lineTo(x, y);
+    if (stop?.(x, y)) break;
+  }
+  ctx.stroke();
+}
+
+/**
+ * A shot that flies along a graph at a steady speed. x's are fired by
+ * functions and change what they touch; plotters and the f(x) boss fire them
+ * at x, after drawing the curve they will follow.
  */
 export class CurveShot {
+  /** Run along x so far (px). */
   u = 0;
   dead = false;
   /** Seconds the curve is shown before the shot sets out. */
   tele: number;
   life: number;
+  /** Where it has been, for its trail. */
+  private trail: { x: number; y: number }[] = [];
+  /** A hole that has taken the shot in: it passes through rock until the hole ends. */
+  hole: object | null = null;
 
   constructor(
-    readonly path: ShotPath,
-    readonly x0: number,
-    readonly y0: number,
+    /** Height above the start (px) after a run of u px. */
+    public g: (u: number) => number,
+    public x0: number,
+    public y0: number,
     /** ±1: which way along x. */
     readonly dir: number,
-    /** Rise per unit run of the base line (screen y, so negative is up). */
-    readonly slope: number,
-    /** Wave height for sine, arc height for the parabola (px, signed). */
-    readonly amp: number,
-    /** Span of the parabola's arc (px). */
-    readonly span: number,
     readonly speed: number,
-    /** What it carries: x for x's functions; null for ln and for hostile shots. */
-    readonly value: Q | null,
     readonly friendly: boolean,
+    /** x's function that fired it, and its a; null for shots fired at x. */
+    readonly fn: string | null,
+    readonly a: number,
     tele = 0,
     life = 2,
   ) {
@@ -39,15 +120,18 @@ export class CurveShot {
   }
 
   pos(u: number): { x: number; y: number } {
-    const x = this.x0 + this.dir * u;
-    let y = this.y0 + this.slope * u;
-    if (this.path === 'sin') y -= this.amp * Math.sin((u / 110) * Math.PI * 2);
-    if (this.path === 'para') y -= (4 * this.amp * u * (this.span - u)) / (this.span * this.span);
-    return { x, y };
+    return { x: this.x0 + this.dir * u, y: this.y0 - this.g(u) };
   }
 
   get head(): { x: number; y: number } {
     return this.pos(this.u);
+  }
+
+  /** Begin again from a new point, at the start of its own shape. */
+  restartAt(x: number, y: number): void {
+    this.x0 = x;
+    this.y0 = y;
+    this.u = 0;
   }
 
   update(dt: number): void {
@@ -55,7 +139,9 @@ export class CurveShot {
       this.tele -= dt;
       return;
     }
-    this.u += this.speed * dt;
+    this.u = runAfter(this.g, this.u, this.speed * dt);
+    this.trail.push(this.head);
+    if (this.trail.length > 22) this.trail.shift();
     this.life -= dt;
     if (this.life <= 0) this.dead = true;
   }
@@ -63,53 +149,44 @@ export class CurveShot {
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.strokeStyle = pal.ink;
     ctx.fillStyle = pal.ink;
-    // the curve ahead, drawn before the shot follows it
     if (!this.friendly) {
-      const reach = this.speed * (this.life + Math.max(0, this.tele));
+      // the curve ahead, drawn before the shot follows it
       ctx.globalAlpha = this.tele > 0 ? 0.35 : 0.12;
       ctx.lineWidth = 1;
       ctx.setLineDash([5, 7]);
-      ctx.beginPath();
-      for (let u = this.u; u <= reach; u += 8) {
-        const p = this.pos(u);
-        if (u === this.u) ctx.moveTo(p.x, p.y);
-        else ctx.lineTo(p.x, p.y);
-      }
-      ctx.stroke();
+      strokePath(ctx, this.g, this.x0, this.y0, this.dir, this.u, this.speed * (this.life + Math.max(0, this.tele)));
       ctx.setLineDash([]);
       if (this.tele > 0) {
         ctx.globalAlpha = 1;
         return;
       }
     }
-    // the trail behind it
-    ctx.globalAlpha = 0.5;
-    ctx.lineWidth = this.friendly ? 2 : 1.5;
-    ctx.beginPath();
-    const from = Math.max(0, this.u - 120);
-    for (let u = from; u <= this.u; u += 6) {
-      const p = this.pos(u);
-      if (u === from) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
+    if (this.trail.length > 1) {
+      ctx.lineWidth = this.friendly ? 2 : 1.5;
+      for (let i = 1; i < this.trail.length; i++) {
+        ctx.globalAlpha = (i / this.trail.length) * 0.6;
+        ctx.beginPath();
+        ctx.moveTo(this.trail[i - 1].x, this.trail[i - 1].y);
+        ctx.lineTo(this.trail[i].x, this.trail[i].y);
+        ctx.stroke();
+      }
     }
-    ctx.stroke();
     const h = this.head;
     ctx.globalAlpha = 1;
-    if (this.path === 'ln') {
-      ctx.font = 'italic 600 18px "Cormorant Garamond", Georgia, serif';
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, this.friendly ? 3.5 : 5, 0, Math.PI * 2);
+    ctx.fill();
+    if (this.friendly && this.fn) {
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.6;
+      ctx.font = serif(13);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('ln', h.x, h.y);
-    } else if (this.value) {
-      ctx.beginPath();
-      ctx.arc(h.x, h.y, 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 0.8;
-      drawQ(ctx, this.value, h.x, h.y - 14, 14);
-    } else {
-      ctx.beginPath();
-      ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillText(this.fn === 'ax' ? fnLabel('ax', this.a).slice(4) : this.fn, h.x, h.y - 16);
     }
     ctx.globalAlpha = 1;
   }

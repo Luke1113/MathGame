@@ -39,9 +39,15 @@ export class EBoss implements Boss {
     private host: BossHost,
     x: number,
     y: number,
+    /** A lesser e, met on the way: two cracks, and it counts itself down and is gone. */
+    private readonly mini = false,
   ) {
     this.x = x;
     this.y = y;
+  }
+
+  private get cracksNeeded(): number {
+    return this.mini ? 2 : 3;
   }
 
   get vulnerable(): boolean {
@@ -164,7 +170,7 @@ export class EBoss implements Boss {
         moveTo(W / 2, 200, 1.5);
         this.r += (30 - this.r) * damp(3, dt);
         if (this.st > 2) {
-          if (this.cracks >= 3) this.go('finale');
+          if (this.cracks >= this.cracksNeeded) this.go('finale');
           else {
             // each time, it begins from a greater power
             this.k = this.cracks + 1;
@@ -175,7 +181,7 @@ export class EBoss implements Boss {
         break;
       case 'finale':
         // e³, e², e¹, e⁰: it counts itself down to where all growth begins
-        if (first) this.k = 3;
+        if (first) this.k = this.cracksNeeded;
         moveTo(W / 2, 200, 1.2);
         this.r += (24 + 9 * Math.max(this.k, 0) - this.r) * damp(4, dt);
         if (this.st > 0.9) {
@@ -185,7 +191,12 @@ export class EBoss implements Boss {
           h.sfx.tone(110 * Math.pow(1.19, this.k + 2), 0.9, { vol: 0.12, type: 'triangle', wet: 0.6 });
           if (this.k === 0) {
             h.fx.text(this.x, this.y - 70, 'e⁰ = 1', { size: 30, life: 3, alpha: 0.9 });
-            this.go('await');
+            if (this.mini) {
+              // where all growth begins: it is taken in
+              this.go('resolve');
+              h.sfx.resolve();
+              h.flash(0.5);
+            } else this.go('await');
           }
         }
         break;
@@ -261,16 +272,21 @@ export class EBoss implements Boss {
     return null;
   }
 
-  ln(x: number, y: number, r: number): string | null | undefined {
+  fnHit(fn: string, a: number, x: number, y: number, r: number): string | null | undefined {
     if (!this.alive || Math.hypot(x - this.x, y - this.y) > this.r + r) return undefined;
     const h = this.host;
+    if (fn !== 'ln') {
+      h.sfx.blocked();
+      if (this.state === 'counted') return null;
+      return fn === 'x²' ? `(e${sup(this.k)})² is only more growth` : `${fn} e${sup(this.k)} never ends`;
+    }
     if (this.state === 'grow') {
-      // counted back: ln eᵏ = k, a number x can hold
-      this.n = Q.int(this.k);
+      // counted back: ln eᵏ = k, a number x can hold (and a ln eᵏ = ak)
+      this.n = Q.int(a * this.k);
       h.sfx.nullify();
       h.flash(0.25);
       h.shake(6);
-      const said = `ln e${sup(this.k)} = ${this.k}`;
+      const said = a === 1 ? `ln e${sup(this.k)} = ${this.k}` : `${String(a).replace('-', '−')} ln e${sup(this.k)} = ${this.n}`;
       this.go('counted');
       return said;
     }

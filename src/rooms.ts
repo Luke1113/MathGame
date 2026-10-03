@@ -1,6 +1,6 @@
 /**
  * The world's maps, chapter by chapter. Chapter I — Arithmetic — is here;
- * Chapter II — The Other Side — is in rooms2.ts.
+ * Chapter II — The Other Side — is in rooms2.ts; Chapter III — Functions — in rooms3.ts.
  *
  * Map legend
  *   #  solid            .  empty            -  one-way platform
@@ -21,7 +21,17 @@ export type EntitySpec =
   | { k: 'walker'; n: NumSpec; label?: string; pow?: number }
   | { k: 'drifter'; n: NumSpec; label?: string; pow?: number }
   /** Draws a graph toward x, then fires along it. */
-  | { k: 'plotter'; n: NumSpec; curve: 'sin' | 'para' }
+  | { k: 'plotter'; n: NumSpec; curve: 'line' | 'sin' | 'para' }
+  /** θ: an angle that turns by 15° at a time. Only its sine is a number. */
+  | { k: 'spinner'; deg: number }
+  /**
+   * A rule carved in rock: a channel shaped like y = f(x) (fn with its a, toward dir),
+   * `len` tiles long. A shot of exactly that rule, fired into its mouth, runs it to
+   * the end and opens the room's lock. The map marks the open cell before the mouth.
+   */
+  | { k: 'hole'; fn: string; a: number; dir: 1 | -1; len: number }
+  /** A door with no number: opened by a hole, or by roots broken in the room's ground. */
+  | { k: 'lock'; h: number; sign?: string }
   /** Doubles itself every few seconds. */
   | { k: 'doubler'; n: number }
   | { k: 'emitter'; n: NumSpec }
@@ -44,7 +54,7 @@ export type EntitySpec =
   | { k: 'seal'; w: number; h: number; until: string }
   | { k: 'shrine'; give: string }
   | { k: 'text'; s: string }
-  | { k: 'boss'; which: 'zero' | 'pi' | 'e' };
+  | { k: 'boss'; which: 'zero' | 'pi' | 'e' | 'fx' };
 
 /** A graph that can be stood on. Units are tiles; y is the surface, measured down. */
 export type CurveSpec =
@@ -68,6 +78,13 @@ export interface RoomDef {
   stairs?: boolean;
   /** Graphs to stand on. */
   curves?: CurveSpec[];
+  /**
+   * Ground that is itself a graph over the room's axes, from column x0 to x1,
+   * free to rise to hi and sink to lo (tiles from the axis), pinned to the axis
+   * within `pin` tiles of each end. With `cycle`, it is rewritten every so many
+   * seconds, and breaking `need` of its roots opens the room's lock.
+   */
+  floor?: { x0: number; x1: number; lo: number; hi: number; pin?: number; cycle?: number; need?: number };
 }
 
 const CHAPTER_ONE: RoomDef[] = [
@@ -465,31 +482,32 @@ export const GLYPHS: Record<string, GlyphInfo> = {
   ax: {
     name: 'the line',
     line: 'Every rule draws a line.',
-    hint: 'F  —  fire the function, carrying x      W / S  —  aim it up or down\nQ  —  choose among the functions you know',
+    hint: 'Hold F: time slows, and the line is drawn from your hand.   A digit sets a:  y = 2x.\nLet go, and it flies.   What it touches is multiplied by a:  2 · 4 = 8.',
   },
   sin: {
     name: 'sine',
     line: 'Some rules return to where they began.',
-    hint: 'F  —  a wave that weaves as it flies.   Its height is x; a negative x turns it over.',
+    hint: 'F and a digit:  y = a sin x.   It takes the sine of what it touches:\nan angle becomes a number,  3 sin 90° = 3.   Hold S to turn any rule over.',
   },
   'x²': {
     name: 'the square',
     line: 'Everything thrown comes down along a parabola.',
-    hint: 'F  —  lob x in an arc.   The arc is as high as x; a negative x throws it downward.',
+    hint: 'F and a digit:  y = x²/a.   What it touches is squared, then divided by a:\n(−3)² / 9 = 1.   Q chooses among the rules you know.',
   },
   '⌊x⌋': {
     name: 'the floor',
     line: 'Every number has a floor beneath it.',
-    hint: 'F  —  build ⌊x⌋ steps in front of you.   ⌊5.7⌋ = 5: hold more, climb higher.',
+    hint: 'F and a digit:  ⌊x⌋ is drawn from your feet, a steps high.\nEach step is a floor of its own, with nothing between: jump from one to the next.',
   },
   ln: {
     name: 'the logarithm',
     line: 'What has grown can be counted back.',
-    hint: 'F  —  a slow shot that counts growth back:   ln e^3 = 3.   It carries no x.',
+    hint: 'F and a digit:  y = a ln(x + 1).   It counts growth back:  ln e³ = 3,  and  ln 1 = 0.\nOf anything else, it never ends.',
   },
   e: {
     name: 'e',
     line: 'It grows by exactly as much as it is.',
+    hint: 'And all growth begins at one:  e⁰ = 1.',
   },
   'π': {
     name: 'pi',
