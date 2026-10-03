@@ -21,6 +21,8 @@ export interface BossHost {
   hurtPlayer(fromX: number): void;
   nullifyPlayer(): void;
   onCrack(x: number, y: number): void;
+  /** Leave a mote of light that heals x. */
+  heal(x: number, y: number): void;
   onIntro(): void;
   onResolved(): void;
   /** Place π on the floor for x to take (Chapter II). */

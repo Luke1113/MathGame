@@ -501,9 +501,12 @@ export class Game {
         g.sfx.nullify();
         g.fx.text(g.player.cx, g.player.y - 22, '× 0', { size: 18 });
       },
+      heal: (x, y) => {
+        g.motes.push({ x, y, t: 0, dead: false });
+      },
       onCrack: (x, y) => {
         g.reward(0.3);
-        g.motes.push({ x: x - 30, y, t: 0, dead: false }, { x: x + 30, y, t: 0, dead: false });
+        g.motes.push({ x: x - 40, y, t: 0, dead: false }, { x, y: y + 30, t: 0, dead: false }, { x: x + 40, y, t: 0, dead: false });
       },
       onIntro: () => {
         g.sealExit(true);

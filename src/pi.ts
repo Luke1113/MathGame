@@ -46,6 +46,8 @@ export class Pi implements Boss {
   private perim = 0;
   private rollAngle = 0;
   private stagger = 0;
+  /** As a wheel, it speaks only from the ceiling: rain from above, never from the side. */
+  private onCeiling = false;
   private ringR = 0;
   private hurtT = 0;
   private crackLines: { a: number; len: number }[] = [];
@@ -131,7 +133,7 @@ export class Pi implements Boss {
           const parts = PHASES[this.phase].parts;
           this.frags = parts.map((n, i) => ({ n, a: (i / parts.length) * Math.PI * 2, alive: true, hurtT: 0 }));
           if (this.phase === 2) this.ringR = 560;
-          this.fireT = 1.4;
+          this.fireT = 2.4;
         }
         this.fight(dt, W, moveTo);
         break;
@@ -139,7 +141,7 @@ export class Pi implements Boss {
         moveTo(W / 2, 200, 2);
         this.r += (R - this.r) * damp(3, dt);
         this.ringR += (700 - this.ringR) * damp(1, dt);
-        if (this.st > 1.6) this.go(this.cracks >= 3 ? 'finale' : 'fight');
+        if (this.st > 2.6) this.go(this.cracks >= 3 ? 'finale' : 'fight');
         break;
       case 'finale': {
         // the circle opens and lies down as a line: its own length, π
@@ -200,12 +202,12 @@ export class Pi implements Boss {
     if (this.phase === 0) {
       // a figure of eight over the room
       this.r += (R - this.r) * damp(3, dt);
-      this.pathA += dt * 0.6 * slow;
+      this.pathA += dt * 0.42 * slow;
       moveTo(W / 2 + Math.cos(this.pathA) * 300, 190 + Math.sin(this.pathA * 2) * 70, 5);
     } else if (this.phase === 1) {
       // a wheel, rolling round the whole room: floor, wall, ceiling, wall
       this.r += (WHEEL_R - this.r) * damp(4, dt);
-      const v = 300 * slow;
+      const v = 210 * slow;
       this.perim += v * dt;
       this.rollAngle += (v * dt) / WHEEL_R;
       const left = 32 + WHEEL_R;
@@ -217,6 +219,7 @@ export class Pi implements Boss {
       const s = this.perim % (2 * (lx + ly));
       let tx: number;
       let ty: number;
+      this.onCeiling = s >= lx + ly && s < 2 * lx + ly;
       if (s < lx) [tx, ty] = [left + s, bottom];
       else if (s < lx + ly) [tx, ty] = [right, bottom - (s - lx)];
       else if (s < 2 * lx + ly) [tx, ty] = [right - (s - lx - ly), top];
@@ -225,31 +228,32 @@ export class Pi implements Boss {
     } else {
       // inside a closing circle, on a faster orbit
       this.r += (R - this.r) * damp(3, dt);
-      this.pathA += dt * 0.85 * slow;
+      this.pathA += dt * 0.55 * slow;
       moveTo(this.ringCx + Math.cos(this.pathA) * 200, 215 + Math.sin(this.pathA) * 90, 5);
-      const target = 330 + Math.sin(this.t * 0.9) * 36;
-      this.ringR += (target - this.ringR) * damp(0.6, dt);
+      const target = 385 + Math.sin(this.t * 0.7) * 22;
+      this.ringR += (target - this.ringR) * damp(0.35, dt);
     }
 
     // the old measurement, in pieces, going round
-    for (const f of this.frags) f.a += dt * 1.3 * slow;
+    for (const f of this.frags) f.a += dt * 0.75 * slow;
 
     // it speaks its digits, and each digit flies: a 9 heavy and slow, a 1 a needle
+    if (this.phase === 1 && !this.onCeiling) return;
     this.fireT -= dt * slow;
     if (this.fireT <= 0) {
       const d = this.peekDigit();
       this.digit++;
-      this.fireT = [1.0, 0.85, 0.7][this.phase];
+      this.fireT = [1.75, 0.85, 1.5][this.phase];
       if (d === 0) {
         this.fireT += 0.5; // a zero: a breath of silence
       } else if (d === 9) {
         for (let i = 0; i < 9; i++) {
           const a = (i / 9) * Math.PI * 2 + this.t;
-          h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * 190, Math.sin(a) * 190, 9);
+          h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * 135, Math.sin(a) * 135, 9);
         }
         h.sfx.wave();
       } else {
-        const speed = 470 - d * 32;
+        const speed = 330 - d * 20;
         const a = Math.atan2(p.cy - this.y, p.cx - this.x);
         h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * speed, Math.sin(a) * speed, d);
         h.sfx.fire();
@@ -264,6 +268,7 @@ export class Pi implements Boss {
     h.fx.burst(pos.x, pos.y, 18, { speed: 240, life: 0.6, line: true });
     h.sfx.kill(Math.abs(f.n.approx) || 1);
     h.reward(0.25);
+    h.heal(pos.x, pos.y);
     h.hitstop(0.08);
     h.shake(4);
     if (this.frags.every((g) => !g.alive)) this.crack();
@@ -290,7 +295,7 @@ export class Pi implements Boss {
       for (const f of this.frags) {
         if (!f.alive) continue;
         const pos = this.fragPos(f);
-        if (!rectCircle(box, pos.x, pos.y, FRAG_R + 2)) continue;
+        if (!rectCircle(box, pos.x, pos.y, FRAG_R + 10)) continue;
         const left = f.n.sub(v);
         if (!left) {
           h.sfx.blocked();
@@ -337,7 +342,7 @@ export class Pi implements Boss {
       }
     }
     if (Math.hypot(this.x - x, this.y - y) < this.r + r) {
-      this.stagger = 0.8;
+      this.stagger = 1.8;
       this.hurtT = 0.2;
       this.host.sfx.hit(3);
       this.host.reward(0.1);
