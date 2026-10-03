@@ -570,7 +570,11 @@ export class Game {
       e.hurtT = 0.05;
       this.hitstop(0.04);
     };
-    if (e.kind === 'door') return blocked(`x = ${e.n}`);
+    if (e.kind === 'door') {
+      // A door yields to its own number: strike it, or equate beside it.
+      if (v === e.n) return this.openDoor(e);
+      return blocked(`${v} ≠ ${e.n}`);
+    }
     if (e.armored) {
       if (!this.has('÷')) return blocked('· · ·');
       if (v > 1 && v <= e.n && e.n % v === 0) return this.split(e, v);
@@ -1227,12 +1231,12 @@ export class Game {
       ['move', 'A  D'],
       ['aim', 'W  S   (S + Space falls through)'],
       ['jump', 'Space'],
-      ['dash', 'Shift'],
+      ['dash', 'Tab'],
       ['strike', 'J   ·   Num 0'],
       ['hold a digit', '1 – 9'],
-      ['+   −   ×   ÷', 'then a digit      U I O P   ·   numpad'],
-      ['equate', 'Enter'],
-      ['slow time', 'Tab   ·   L   ·   Num .'],
+      ['+   −   ×   ÷', 'then a digit      type them, or U I O P'],
+      ['equate', 'Enter   ·   ='],
+      ['slow time', 'L   ·   Num .'],
       ['return', 'Esc'],
     ];
     rows.forEach(([a, b], i) => {

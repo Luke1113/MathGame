@@ -26,35 +26,48 @@ const HOLD: Record<string, Hold> = {
   KeyS: 'down',
   ArrowDown: 'down',
   Space: 'jump',
-  Tab: 'focus',
   KeyL: 'focus',
   NumpadDecimal: 'focus',
 };
 
-const OPS: Record<string, Op> = {
+/** Operator keys by physical position: numpad, plus U I O P (and X for times) on a laptop. */
+const OP_CODES: Record<string, Op> = {
   NumpadAdd: '+',
   KeyU: '+',
   NumpadSubtract: '−',
   KeyI: '−',
-  Minus: '−',
   NumpadMultiply: '×',
   KeyO: '×',
+  KeyX: '×',
   NumpadDivide: '÷',
   KeyP: '÷',
-  Slash: '÷',
+};
+
+/** Operator symbols by the character typed, so Shift + = gives + and Shift + 8 gives ×, on any layout. */
+const OP_CHARS: Record<string, Op> = {
+  '+': '+',
+  '-': '−',
+  '−': '−',
+  '*': '×',
+  '×': '×',
+  '/': '÷',
+  '÷': '÷',
 };
 
 function classify(e: KeyboardEvent): Ev {
   const c = e.code;
-  if (c === 'Equal') return e.key === '+' ? { k: 'op', op: '+' } : { k: 'equate' };
-  if (c in OPS) return { k: 'op', op: OPS[c] };
+  if (c === 'Tab') return { k: 'dash' };
   if (c === 'Space') return { k: 'jump' };
-  if (c === 'ShiftLeft' || c === 'ShiftRight') return { k: 'dash' };
   if (c === 'KeyJ' || c === 'Numpad0') return { k: 'strike' };
   if (c === 'Enter' || c === 'NumpadEnter') return { k: 'equate' };
   if (c === 'Escape') return { k: 'pause' };
-  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(c);
-  if (digit) return { k: 'digit', d: Number(digit[1]) };
+  if (c in OP_CODES) return { k: 'op', op: OP_CODES[c] };
+  // Typed characters next: Shift + 8 has code Digit8 but means ×.
+  if (e.key in OP_CHARS) return { k: 'op', op: OP_CHARS[e.key] };
+  if (e.key === '=') return { k: 'equate' };
+  if (/^[0-9]$/.test(e.key)) return { k: 'digit', d: Number(e.key) };
+  const numpad = /^Numpad([1-9])$/.exec(c);
+  if (numpad) return { k: 'digit', d: Number(numpad[1]) };
   const hold = HOLD[c];
   if (hold === 'up' || hold === 'down' || hold === 'left' || hold === 'right') return { k: hold };
   return { k: 'other' };

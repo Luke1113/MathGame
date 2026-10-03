@@ -22,12 +22,12 @@ npm run check:rooms    # validate the chapter maps
 |---|---|---|
 | move / aim | `A` `D` / `W` `S` | |
 | jump · drop through | `Space` · `S`+`Space` | |
-| dash | `Shift` | |
+| dash | `Tab` | |
 | strike | `J` | `Num 0` |
 | hold a digit | `1`–`9` | `1`–`9` |
-| `+` `−` `×` `÷`, then a digit | `U` `I` `O` `P` | `+` `−` `*` `/` |
-| equate | `Enter` | `Enter` |
-| slow time | `Tab` / `L` | `Num .` |
+| `+` `−` `×` `÷`, then a digit | type `+` `-` `*` `/` (Shift as needed), or `U` `I` `O` `P` | `+` `−` `*` `/` |
+| equate | `Enter` or `=` | `Enter` |
+| slow time | `L` | `Num .` |
 | pause / controls | `Esc` | |
 
 ## The rules of Chapter I
@@ -36,7 +36,8 @@ npm run check:rooms    # validate the chapter maps
 - **You cannot take more than there is.** If x is larger than the enemy, the strike is turned aside. Lower x first.
 - **A digit alone sets x to that digit. An operator followed by a digit changes x**, so `4`, `×`, `6` makes x = 24. Choosing a number slows time while you think. The slowdown draws on a small meter.
 - **The bound** (framed numbers) can't be lessened, only *shared*. Strike them with a number that divides them, and they break into that many equal pieces.
-- **Equate** (`Enter`) undoes every enemy on screen whose number equals x. It also opens doors marked with their number.
+- **Equate** (`Enter`) undoes every enemy on screen whose number equals x.
+- **Doors** open to their own number: strike one while holding exactly that number, or equate beside it.
 - **Lamps** save your progress and restore you.
 
 ## Code map
