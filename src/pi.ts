@@ -3,35 +3,33 @@ import { clamp, damp, pal, Rect, rectCircle, serif } from './constants';
 import { drawQ } from './draw';
 import { Q } from './num';
 
-const DIGITS = '3141592653589793238462643383279502884197169399375105820974944';
+const DIGITS = '3141592653589793238462643383279502884197169399375105820974944592307816406286';
 const SHOWN = '3.' + DIGITS.slice(1);
 
-/** π's weak moments: the old measurements of the circle, each a little wrong. */
-const APPROX: { q: Q; who: string }[] = [
-  { q: Q.of(25, 8), who: 'as Babylon measured it' },
-  { q: Q.of(256, 81), who: 'as Egypt measured it' },
-  { q: Q.of(22, 7), who: 'as Archimedes measured it' },
+/**
+ * π's three faces. Around it circle the pieces of an old measurement of the
+ * circle; break them all and it cracks.
+ */
+const PHASES: { parts: Q[]; sum: Q; who: string }[] = [
+  { parts: [Q.int(3), Q.of(1, 8)], sum: Q.of(25, 8), who: 'as Babylon measured it' },
+  { parts: [Q.int(3), Q.of(1, 7)], sum: Q.of(22, 7), who: 'as Archimedes measured it' },
+  { parts: [Q.int(3), Q.of(1, 10), Q.of(1, 25)], sum: Q.of(157, 50), who: 'as the schoolbook writes it: 3.14' },
 ];
 
-const R = 70;
-const ROLL_R = 42;
+const R = 62;
+const WHEEL_R = 44;
+const FRAG_R = 17;
 
-type State =
-  | 'dormant'
-  | 'intro'
-  | 'hover'
-  | 'recite'
-  | 'roll'
-  | 'spokes'
-  | 'measure'
-  | 'cracked'
-  | 'release'
-  | 'finale'
-  | 'await'
-  | 'resolve'
-  | 'gone';
+type State = 'dormant' | 'intro' | 'fight' | 'cracked' | 'finale' | 'await' | 'resolve' | 'gone';
 
-/** π: the number that never ends. */
+interface Fragment {
+  n: Q;
+  a: number;
+  alive: boolean;
+  hurtT: number;
+}
+
+/** π: the number that never ends, and never stops. */
 export class Pi implements Boss {
   x: number;
   y: number;
@@ -41,19 +39,14 @@ export class Pi implements Boss {
   private fresh = true;
   private t = 0;
   cracks = 0;
-  n = Q.ZERO;
+  private frags: Fragment[] = [];
   private digit = 0;
-  private attacks = 0;
-  private last = '';
-  private targetX: number;
-  private targetY = 170;
-  private volleys = 0;
-  private preview = -1;
-  private rollDir = 1;
+  private fireT = 1.2;
+  private pathA = 0;
+  private perim = 0;
   private rollAngle = 0;
-  private rollFrom = 0;
-  private spokeA = 0;
-  private spokeSpin = 1;
+  private stagger = 0;
+  private ringR = 0;
   private hurtT = 0;
   private crackLines: { a: number; len: number }[] = [];
   private unroll = 0;
@@ -67,23 +60,28 @@ export class Pi implements Boss {
   ) {
     this.x = x;
     this.y = y;
-    this.targetX = x;
   }
 
   get vulnerable(): boolean {
-    return this.state === 'measure';
+    return this.state === 'fight';
   }
   private get alive(): boolean {
     return this.state !== 'dormant' && this.state !== 'gone';
   }
-  private get speedUp(): number {
-    return 1 + this.cracks * 0.2;
-  }
-  private get spokeCount(): number {
-    return this.cracks >= 2 ? 3 : 2;
+  private get phase(): number {
+    return Math.min(this.cracks, 2);
   }
   private get holdsPi(): boolean {
     return !!this.host.player.value?.eq(Q.PI);
+  }
+  private get rolling(): boolean {
+    return this.state === 'fight' && this.phase === 1;
+  }
+  private get ringCx(): number {
+    return this.host.arenaW / 2;
+  }
+  private get ringCy(): number {
+    return 250;
   }
 
   private go(s: State): void {
@@ -92,10 +90,13 @@ export class Pi implements Boss {
     this.fresh = true;
   }
 
-  private nextDigit(): number {
-    const d = Number(DIGITS[this.digit % DIGITS.length]);
-    this.digit++;
-    return d;
+  private peekDigit(): number {
+    return Number(DIGITS[this.digit % DIGITS.length]);
+  }
+
+  private fragPos(f: Fragment): { x: number; y: number } {
+    const rr = this.r + 46;
+    return { x: this.x + Math.cos(f.a) * rr, y: this.y + Math.sin(f.a) * rr };
   }
 
   update(dt: number): void {
@@ -106,13 +107,12 @@ export class Pi implements Boss {
     const first = this.fresh;
     this.fresh = false;
     this.hurtT = Math.max(0, this.hurtT - dt);
+    this.stagger = Math.max(0, this.stagger - dt);
+    for (const f of this.frags) f.hurtT = Math.max(0, f.hurtT - dt);
     const W = h.arenaW;
     const moveTo = (tx: number, ty: number, rate: number) => {
       this.x += (tx - this.x) * damp(rate, dt);
       this.y += (ty - this.y) * damp(rate, dt);
-    };
-    const growTo = (r: number, rate = 4) => {
-      this.r += (r - this.r) * damp(rate, dt);
     };
 
     switch (this.state) {
@@ -124,118 +124,22 @@ export class Pi implements Boss {
         return;
       case 'intro':
         this.r = R;
-        if (this.st > 3.8) this.go('hover');
+        if (this.st > 3.6) this.go('fight');
         return;
-      case 'hover': {
+      case 'fight':
         if (first) {
-          const options = [190, W / 2, W - 190].filter((x) => Math.abs(x - this.x) > 60);
-          this.targetX = options[Math.floor(Math.random() * options.length)] ?? W / 2;
-          this.targetY = 150 + Math.random() * 40;
+          const parts = PHASES[this.phase].parts;
+          this.frags = parts.map((n, i) => ({ n, a: (i / parts.length) * Math.PI * 2, alive: true, hurtT: 0 }));
+          if (this.phase === 2) this.ringR = 560;
+          this.fireT = 1.4;
         }
-        moveTo(this.targetX, this.targetY, 2);
-        growTo(R);
-        if (this.st > 1.1 / this.speedUp) {
-          if (this.attacks >= 2) {
-            this.attacks = 0;
-            this.go('measure');
-            h.sfx.nullify();
-          } else {
-            const pick = ['recite', 'roll', 'spokes'].filter((a) => a !== this.last);
-            const a = pick[Math.floor(Math.random() * pick.length)] as State;
-            this.last = a;
-            this.attacks++;
-            this.go(a);
-          }
-        }
+        this.fight(dt, W, moveTo);
         break;
-      }
-      case 'recite': {
-        // it speaks its digits, and each digit is a volley of that many
-        if (first) {
-          this.volleys = 0;
-          this.preview = Number(DIGITS[this.digit % DIGITS.length]);
-        }
-        moveTo(this.x, 160, 2);
-        const at = 0.8 + this.volleys * 1.15;
-        if (this.volleys < 2 && this.st > at) {
-          const k = this.nextDigit();
-          const speed = 270 + this.cracks * 30;
-          const base = Math.atan2(p.cy - this.y, p.cx - this.x);
-          for (let i = 0; i < k; i++) {
-            const a = base + (i - (k - 1) / 2) * 0.17;
-            h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * speed, Math.sin(a) * speed);
-          }
-          if (k > 0) h.sfx.fire();
-          h.fx.text(this.x, this.y - this.r - 30, String(k), { size: 34, life: 0.9, alpha: 0.6 });
-          this.volleys++;
-          this.preview = this.volleys < 2 ? Number(DIGITS[this.digit % DIGITS.length]) : -1;
-        }
-        if (this.volleys >= 2 && this.st > at + 0.4) {
-          this.preview = -1;
-          this.go('hover');
-        }
-        break;
-      }
-      case 'roll': {
-        // it becomes a wheel; one turn covers π diameters of floor
-        const floorCy = h.floorY - ROLL_R;
-        if (first) {
-          this.rollDir = p.cx < W / 2 ? -1 : 1;
-          this.rollFrom = this.rollDir > 0 ? 100 : W - 100;
-        }
-        if (this.st < 0.9) {
-          moveTo(this.rollFrom, floorCy, 6);
-          growTo(ROLL_R, 6);
-        } else if (this.st < 0.9 + 0.01 || (this.rollDir > 0 ? this.x < W - 100 : this.x > 100)) {
-          if (this.st - dt < 0.9) h.sfx.wave();
-          this.y = floorCy;
-          this.r = ROLL_R;
-          const v = 380 * this.speedUp;
-          this.x += this.rollDir * v * dt;
-          this.rollAngle += (v * dt) / ROLL_R;
-        } else {
-          moveTo(this.x, 170, 3);
-          growTo(R, 3);
-          if (this.y < 220) this.go('hover');
-        }
-        break;
-      }
-      case 'spokes': {
-        // radii sweep the room; only a dash passes through a line
-        if (first) {
-          this.spokeA = Math.random() * Math.PI * 2;
-          this.spokeSpin = Math.random() < 0.5 ? 1 : -1;
-        }
-        moveTo(W / 2, 190, 3);
-        if (this.st > 0.9) this.spokeA += this.spokeSpin * 0.78 * this.speedUp * dt;
-        if (this.st > 4.4) this.go('hover');
-        break;
-      }
-      case 'measure': {
-        if (first) this.n = APPROX[this.cracks].q;
-        const floorCy = h.floorY - R - 8;
-        const tx = clamp(p.cx, R + 30, W - R - 30);
-        this.x += clamp(tx - this.x, -26 * dt, 26 * dt);
-        this.y += (floorCy - this.y) * damp(3, dt);
-        growTo(R);
-        if (this.st > 13) this.go('release');
-        break;
-      }
-      case 'release': {
-        const k = Math.max(3, this.nextDigit());
-        for (let i = 0; i < k * 2; i++) {
-          const a = (i / (k * 2)) * Math.PI * 2 - Math.PI / 2;
-          h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * 240, Math.sin(a) * 240);
-        }
-        h.sfx.wave();
-        h.shake(5);
-        this.n = Q.ZERO;
-        this.go('hover');
-        break;
-      }
       case 'cracked':
-        moveTo(this.x, 200, 1.5);
-        if (this.st > 1.8) this.go(this.cracks >= 3 ? 'finale' : 'hover');
+        moveTo(W / 2, 200, 2);
+        this.r += (R - this.r) * damp(3, dt);
+        this.ringR += (700 - this.ringR) * damp(1, dt);
+        if (this.st > 1.6) this.go(this.cracks >= 3 ? 'finale' : 'fight');
         break;
       case 'finale': {
         // the circle opens and lies down as a line: its own length, π
@@ -279,73 +183,168 @@ export class Pi implements Boss {
     // contact
     if (p.invuln <= 0 && !p.dashing) {
       const box: Rect = { x: p.x, y: p.y, w: p.w, h: p.h };
-      const harmful = ['hover', 'recite', 'roll', 'spokes', 'cracked'].includes(this.state);
+      const harmful = this.state === 'fight' || this.state === 'cracked';
       if (harmful && rectCircle(box, this.x, this.y, this.r * 0.85)) h.hurtPlayer(this.x);
-      else if (this.state === 'spokes' && this.st > 0.9) {
-        for (const [x0, y0, x1, y1] of this.spokes()) {
-          if (segmentHits(box, x0, y0, x1, y1)) {
-            h.hurtPlayer(this.x);
-            break;
-          }
-        }
+      else if (this.state === 'fight' && this.phase === 2 && Math.hypot(p.cx - this.ringCx, p.cy - this.ringCy) > this.ringR) {
+        // outside the circle there is nothing; the blow throws x back in
+        h.hurtPlayer(p.cx + Math.sign(p.cx - this.ringCx) * 10);
       }
     }
-    if (this.state === 'measure' && rectCircle({ x: p.x, y: p.y, w: p.w, h: p.h }, this.x, this.y, this.r * 0.8)) {
-      p.vx = Math.sign(p.cx - this.x || 1) * 160;
-    }
   }
 
-  private spokes(): [number, number, number, number][] {
-    const out: [number, number, number, number][] = [];
-    for (let i = 0; i < this.spokeCount; i++) {
-      const a = this.spokeA + (i / this.spokeCount) * Math.PI * 2;
-      out.push([this.x + Math.cos(a) * (this.r + 6), this.y + Math.sin(a) * (this.r + 6), this.x + Math.cos(a) * 620, this.y + Math.sin(a) * 620]);
-    }
-    return out;
-  }
-
-  touches(box: Rect): boolean {
-    return this.alive && this.r > 10 && this.state !== 'resolve' && rectCircle(box, this.x, this.y, this.r);
-  }
-
-  matches(v: Q): boolean {
-    return this.state === 'measure' && this.n.eq(v);
-  }
-
-  struck(v: Q): string | null {
+  private fight(dt: number, W: number, moveTo: (x: number, y: number, rate: number) => void): void {
     const h = this.host;
+    const p = h.player;
+    const slow = this.stagger > 0 ? 0.15 : 1;
+
+    if (this.phase === 0) {
+      // a figure of eight over the room
+      this.r += (R - this.r) * damp(3, dt);
+      this.pathA += dt * 0.6 * slow;
+      moveTo(W / 2 + Math.cos(this.pathA) * 300, 190 + Math.sin(this.pathA * 2) * 70, 5);
+    } else if (this.phase === 1) {
+      // a wheel, rolling round the whole room: floor, wall, ceiling, wall
+      this.r += (WHEEL_R - this.r) * damp(4, dt);
+      const v = 300 * slow;
+      this.perim += v * dt;
+      this.rollAngle += (v * dt) / WHEEL_R;
+      const left = 32 + WHEEL_R;
+      const right = W - 32 - WHEEL_R;
+      const top = 32 + WHEEL_R;
+      const bottom = h.floorY - WHEEL_R;
+      const lx = right - left;
+      const ly = bottom - top;
+      const s = this.perim % (2 * (lx + ly));
+      let tx: number;
+      let ty: number;
+      if (s < lx) [tx, ty] = [left + s, bottom];
+      else if (s < lx + ly) [tx, ty] = [right, bottom - (s - lx)];
+      else if (s < 2 * lx + ly) [tx, ty] = [right - (s - lx - ly), top];
+      else [tx, ty] = [left, top + (s - 2 * lx - ly)];
+      moveTo(tx, ty, this.st < 1 ? 4 : 30);
+    } else {
+      // inside a closing circle, on a faster orbit
+      this.r += (R - this.r) * damp(3, dt);
+      this.pathA += dt * 0.85 * slow;
+      moveTo(this.ringCx + Math.cos(this.pathA) * 200, 215 + Math.sin(this.pathA) * 90, 5);
+      const target = 330 + Math.sin(this.t * 0.9) * 36;
+      this.ringR += (target - this.ringR) * damp(0.6, dt);
+    }
+
+    // the old measurement, in pieces, going round
+    for (const f of this.frags) f.a += dt * 1.3 * slow;
+
+    // it speaks its digits, and each digit flies: a 9 heavy and slow, a 1 a needle
+    this.fireT -= dt * slow;
+    if (this.fireT <= 0) {
+      const d = this.peekDigit();
+      this.digit++;
+      this.fireT = [1.0, 0.85, 0.7][this.phase];
+      if (d === 0) {
+        this.fireT += 0.5; // a zero: a breath of silence
+      } else if (d === 9) {
+        for (let i = 0; i < 9; i++) {
+          const a = (i / 9) * Math.PI * 2 + this.t;
+          h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * 190, Math.sin(a) * 190, 9);
+        }
+        h.sfx.wave();
+      } else {
+        const speed = 470 - d * 32;
+        const a = Math.atan2(p.cy - this.y, p.cx - this.x);
+        h.shoot(this.x + Math.cos(a) * this.r, this.y + Math.sin(a) * this.r, Math.cos(a) * speed, Math.sin(a) * speed, d);
+        h.sfx.fire();
+      }
+    }
+  }
+
+  private breakFrag(f: Fragment): void {
+    const h = this.host;
+    const pos = this.fragPos(f);
+    f.alive = false;
+    h.fx.burst(pos.x, pos.y, 18, { speed: 240, life: 0.6, line: true });
+    h.sfx.kill(Math.abs(f.n.approx) || 1);
+    h.reward(0.25);
+    h.hitstop(0.08);
+    h.shake(4);
+    if (this.frags.every((g) => !g.alive)) this.crack();
+  }
+
+  private crack(): void {
+    const h = this.host;
+    this.cracks++;
+    this.crackLines.push({ a: Math.random() * Math.PI * 2, len: 0.5 + Math.random() * 0.4 });
+    this.crackLines.push({ a: Math.random() * Math.PI * 2, len: 0.3 + Math.random() * 0.3 });
+    h.sfx.crack();
+    h.hitstop(0.35);
+    h.shake(14);
+    h.flash(0.7);
+    h.fx.burst(this.x, this.y, 40, { speed: 380, life: 1.1, line: true });
+    h.onCrack(this.x, this.y);
+    this.go('cracked');
+  }
+
+  hit(box: Rect, v: Q): string | null | undefined {
+    const h = this.host;
+    if (!this.alive || this.state === 'resolve') return undefined;
+    if (this.state === 'fight') {
+      for (const f of this.frags) {
+        if (!f.alive) continue;
+        const pos = this.fragPos(f);
+        if (!rectCircle(box, pos.x, pos.y, FRAG_R + 2)) continue;
+        const left = f.n.sub(v);
+        if (!left) {
+          h.sfx.blocked();
+          return 'π will not mix';
+        }
+        f.n = left;
+        f.hurtT = 0.15;
+        if (f.n.isZero) this.breakFrag(f);
+        else {
+          h.sfx.hit(Math.abs(v.approx));
+          h.hitstop(0.04);
+        }
+        return null;
+      }
+    }
+    if (this.r < 10 || !rectCircle(box, this.x, this.y, this.r)) return undefined;
     if (this.state === 'await' && v.eq(Q.PI)) {
       this.tryResolve();
       return 'π − π = 0';
     }
-    if (this.state !== 'measure') {
-      h.sfx.blocked();
-      const rest = Math.PI - v.approx;
-      return `π − ${v} = ${rest.toFixed(5)}…`;
+    h.sfx.blocked();
+    this.stagger = Math.max(this.stagger, 0.25);
+    return `π − ${v} = ${(Math.PI - v.approx).toFixed(5)}…`;
+  }
+
+  matches(v: Q): boolean {
+    return this.state === 'fight' && this.frags.some((f) => f.alive && f.n.eq(v));
+  }
+
+  equate(v: Q): void {
+    const f = this.frags.find((g) => g.alive && g.n.eq(v));
+    if (f) this.breakFrag(f);
+  }
+
+  /** A digit struck back: it shatters any piece it meets, and staggers π itself. */
+  catchShot(x: number, y: number, r: number): boolean {
+    if (this.state !== 'fight') return false;
+    for (const f of this.frags) {
+      if (!f.alive) continue;
+      const pos = this.fragPos(f);
+      if (Math.hypot(pos.x - x, pos.y - y) < FRAG_R + r + 4) {
+        this.breakFrag(f);
+        return true;
+      }
     }
-    const left = this.n.sub(v);
-    if (!left) {
-      h.sfx.blocked();
-      return 'π will not mix';
+    if (Math.hypot(this.x - x, this.y - y) < this.r + r) {
+      this.stagger = 0.8;
+      this.hurtT = 0.2;
+      this.host.sfx.hit(3);
+      this.host.reward(0.1);
+      this.host.shake(5);
+      return true;
     }
-    this.n = left;
-    this.hurtT = 0.15;
-    h.sfx.hit(Math.abs(v.approx));
-    h.hitstop(0.06);
-    h.shake(3);
-    if (this.n.isZero) {
-      this.cracks++;
-      this.crackLines.push({ a: Math.random() * Math.PI * 2, len: 0.5 + Math.random() * 0.4 });
-      this.crackLines.push({ a: Math.random() * Math.PI * 2, len: 0.3 + Math.random() * 0.3 });
-      h.sfx.crack();
-      h.hitstop(0.35);
-      h.shake(14);
-      h.flash(0.7);
-      h.fx.burst(this.x, this.y, 40, { speed: 380, life: 1.1, line: true });
-      h.onCrack(this.x, this.y);
-      this.go('cracked');
-    }
-    return null;
+    return false;
   }
 
   tryResolve(): boolean {
@@ -365,41 +364,24 @@ export class Pi implements Boss {
     ctx.textBaseline = 'middle';
     const r = this.r;
 
-    // spokes: telegraph, then lines
-    if (this.state === 'spokes') {
-      const armed = this.st > 0.9;
-      ctx.lineWidth = armed ? 2 : 1;
-      ctx.globalAlpha = armed ? 0.85 : 0.2 + 0.15 * Math.sin(this.t * 25);
-      if (!armed) ctx.setLineDash([6, 8]);
+    // the closing circle of the last phase: outside it, nothing
+    if (this.state === 'fight' && this.phase === 2) {
+      ctx.save();
+      ctx.globalAlpha = 0.1;
       ctx.beginPath();
-      for (const [x0, y0, x1, y1] of this.spokes()) {
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // the floor a wheel has measured
-    if (this.state === 'roll' && this.st > 0.9) {
-      const from = this.rollFrom;
-      ctx.globalAlpha = 0.5;
-      ctx.lineWidth = 1;
+      ctx.rect(0, 0, h.arenaW, 600);
+      ctx.arc(this.ringCx, this.ringCy, this.ringR, 0, Math.PI * 2, true);
+      ctx.fill();
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(from, h.floorY - 1);
-      ctx.lineTo(this.x, h.floorY - 1);
-      const turn = Math.PI * 2 * ROLL_R;
-      for (let d = 0; d <= Math.abs(this.x - from); d += turn) {
-        const x = from + this.rollDir * d;
-        ctx.moveTo(x, h.floorY - 7);
-        ctx.lineTo(x, h.floorY + 3);
-      }
+      ctx.arc(this.ringCx, this.ringCy, this.ringR, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.restore();
     }
 
     const finaleK = this.unroll;
     if (r > 0.5 && this.state !== 'resolve') {
-      // the circle, drawn as far as it has unrolled
       ctx.globalAlpha = 1;
       ctx.lineWidth = this.hurtT > 0 ? 4.5 : 2.5;
       ctx.beginPath();
@@ -416,20 +398,18 @@ export class Pi implements Boss {
         ctx.lineTo(this.x + len / 2, this.y + r + 10 + finaleK * 40);
         ctx.stroke();
       }
-      ctx.globalAlpha = 0.22;
-      ctx.lineWidth = 1;
       if (this.state !== 'finale') {
+        ctx.globalAlpha = 0.22;
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(this.x, this.y, r * 0.72, 0, Math.PI * 2);
         ctx.stroke();
       }
-
-      // a wheel shows its turning
-      if (this.state === 'roll') {
+      if (this.rolling) {
         ctx.globalAlpha = 0.6;
         ctx.beginPath();
         for (let i = 0; i < 3; i++) {
-          const a = this.rollAngle * this.rollDir + (i * Math.PI * 2) / 3;
+          const a = this.rollAngle + (i * Math.PI * 2) / 3;
           ctx.moveTo(this.x, this.y);
           ctx.lineTo(this.x + Math.cos(a) * r, this.y + Math.sin(a) * r);
         }
@@ -439,14 +419,14 @@ export class Pi implements Boss {
       // its digits, going round and never repeating
       if (this.state !== 'finale' && this.state !== 'await') {
         const k = this.state === 'intro' ? clamp((this.st - 1.2) / 1.5, 0, 1) : 1;
-        const rr = r + 17;
-        ctx.font = serif(13, { italic: false, weight: 500 });
-        const step = 10 / rr;
-        const spin = this.t * 0.35 + (this.state === 'roll' ? this.rollAngle * this.rollDir : 0);
+        const rr = r + 16;
+        ctx.font = serif(12, { italic: false, weight: 500 });
+        const step = 9.5 / rr;
+        const spin = this.t * 0.35 + (this.rolling ? this.rollAngle : 0);
         const count = Math.min(SHOWN.length, Math.floor((Math.PI * 2) / step) - 3);
         for (let i = 0; i < count; i++) {
           const a = -Math.PI / 2 + spin + i * step;
-          ctx.globalAlpha = k * 0.75 * (1 - i / count);
+          ctx.globalAlpha = k * 0.7 * (1 - i / count);
           ctx.save();
           ctx.translate(this.x + Math.cos(a) * rr, this.y + Math.sin(a) * rr);
           ctx.rotate(a + Math.PI / 2);
@@ -455,51 +435,57 @@ export class Pi implements Boss {
         }
       }
 
-      // cracks
       ctx.globalAlpha = 0.9;
       ctx.lineWidth = 1.5;
-      for (const c of this.crackLines) {
-        if (finaleK > 0) break;
-        const sx = this.x + Math.cos(c.a) * r;
-        const sy = this.y + Math.sin(c.a) * r;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(sx - Math.cos(c.a) * r * c.len * 0.5 + Math.sin(c.a) * 6, sy - Math.sin(c.a) * r * c.len * 0.5);
-        ctx.lineTo(sx - Math.cos(c.a) * r * c.len, sy - Math.sin(c.a) * r * c.len + 4);
-        ctx.stroke();
+      if (finaleK === 0) {
+        for (const c of this.crackLines) {
+          const sx = this.x + Math.cos(c.a) * r;
+          const sy = this.y + Math.sin(c.a) * r;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx - Math.cos(c.a) * r * c.len * 0.5 + Math.sin(c.a) * 6, sy - Math.sin(c.a) * r * c.len * 0.5);
+          ctx.lineTo(sx - Math.cos(c.a) * r * c.len, sy - Math.sin(c.a) * r * c.len + 4);
+          ctx.stroke();
+        }
       }
     }
 
-    // the heart of it: π, or the fraction it is pretending to be
-    if (this.state === 'measure') {
-      ctx.globalAlpha = 1;
-      drawQ(ctx, this.n, this.x, this.y, 34 + (this.hurtT > 0 ? 6 : 0), 600);
-      ctx.globalAlpha = 0.55;
-      ctx.font = serif(15);
-      ctx.fillText(APPROX[Math.min(this.cracks, 2)].who, this.x, this.y + r + 24);
-      const left = 1 - this.st / 13;
-      ctx.globalAlpha = 0.35;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, r * 1.28, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left);
-      ctx.stroke();
-    } else {
+    // the glyph
+    {
       const k = this.state === 'intro' ? clamp((this.st - 1.6) / 1.2, 0, 1) : this.state === 'resolve' ? 1 - clamp(this.st / 3, 0, 1) : 1;
       const size = this.state === 'await' || this.state === 'resolve' ? 70 : r * 1.35;
       ctx.globalAlpha = k;
       ctx.save();
       ctx.translate(this.x, this.y + 4);
-      if (this.state === 'roll') ctx.rotate(this.rollAngle * this.rollDir);
+      if (this.rolling) ctx.rotate(this.rollAngle);
       ctx.font = serif(size, { weight: 500 });
       ctx.fillText('π', 0, 0);
       ctx.restore();
     }
 
-    // the next digit, spoken before it is fired
-    if (this.preview >= 0 && this.state === 'recite') {
-      ctx.globalAlpha = 0.25 + 0.1 * Math.sin(this.t * 6);
-      ctx.font = serif(64, { weight: 400 });
-      ctx.fillText(String(this.preview), this.x, this.y - r - 52);
+    // the pieces of the old measurement
+    if (this.state === 'fight') {
+      for (const f of this.frags) {
+        if (!f.alive) continue;
+        const pos = this.fragPos(f);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = pal.void;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, FRAG_R, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = pal.ink;
+        ctx.lineWidth = f.hurtT > 0 ? 3 : 1.5;
+        ctx.stroke();
+        drawQ(ctx, f.n, pos.x, pos.y, f.n.d === 1 ? 19 : 17, 600);
+      }
+      const ph = PHASES[this.phase];
+      ctx.globalAlpha = 0.5;
+      ctx.font = serif(15);
+      ctx.fillText(`${ph.parts.map((q) => q.toString()).join(' + ')} = ${ph.sum}   ·   ${ph.who}`, h.arenaW / 2, 70);
+      // the next digit, spoken before it flies
+      ctx.globalAlpha = 0.18 + 0.08 * Math.sin(this.t * 6);
+      ctx.font = serif(44, { weight: 400 });
+      ctx.fillText(String(this.peekDigit()), this.x, this.y - r - 62);
     }
 
     // the waiting sign between them
@@ -515,20 +501,12 @@ export class Pi implements Boss {
 
   lights(add: (x: number, y: number, r: number, a: number) => void): void {
     if (!this.alive) return;
-    add(this.x, this.y, 170 + this.r, this.state === 'measure' ? 0.9 : 0.65);
-    if (this.state === 'spokes') for (const [, , x1, y1] of this.spokes()) add((this.x + x1) / 2, (this.y + y1) / 2, 160, 0.5);
+    add(this.x, this.y, 190 + this.r, 0.8);
+    if (this.state !== 'fight') return;
+    for (const f of this.frags) {
+      if (!f.alive) continue;
+      const pos = this.fragPos(f);
+      add(pos.x, pos.y, 70, 0.6);
+    }
   }
 }
-
-/** Does a line segment pass through a rectangle? (sampled finely enough for thin bodies) */
-function segmentHits(r: Rect, x0: number, y0: number, x1: number, y1: number): boolean {
-  const len = Math.hypot(x1 - x0, y1 - y0);
-  const steps = Math.ceil(len / 5);
-  for (let i = 0; i <= steps; i++) {
-    const x = x0 + ((x1 - x0) * i) / steps;
-    const y = y0 + ((y1 - y0) * i) / steps;
-    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return true;
-  }
-  return false;
-}
-

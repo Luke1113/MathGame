@@ -20,6 +20,10 @@ export type EntitySpec =
   | { k: 'drifter'; n: NumSpec; label?: string }
   | { k: 'emitter'; n: NumSpec }
   | { k: 'orbiter'; n: NumSpec }
+  /** A whole: cannot be lessened, only broken — a whole number k breaks it into k equal pieces. */
+  | { k: 'whole'; n: number }
+  /** A circle of `parts` wedges, 1/parts each, that break away one by one. */
+  | { k: 'slice'; parts: number }
   | { k: 'bound'; n: number }
   | { k: 'gate'; n: number; w: number; h: number }
   /** A door opens to its number. `sign` is what is written on it, if not the number itself. */
@@ -392,7 +396,7 @@ export const GLYPHS: Record<string, GlyphInfo> = {
   '+': {
     name: 'plus',
     line: 'One, and one more.',
-    hint: 'a digit alone  —  hold that number\n+ (or U), then a digit  —  add it to x',
+    hint: 'a digit alone  —  hold that number      + (or U), then a digit  —  add it to x\nDigits that fall from the undone join x by the last sign you used.',
   },
   '×': {
     name: 'times',
@@ -412,7 +416,7 @@ export const GLYPHS: Record<string, GlyphInfo> = {
   '=': {
     name: 'equals',
     line: 'Two things, the same, are one thing.',
-    hint: 'Enter or =  —  equate.   All that equals x is undone.\nA door opens to its own number: strike it, or equate beside it.',
+    hint: 'Enter or =  —  undo the nearest number equal to x, and its equals close beside it.\nIt spends the circle beside x; exact kills fill it.   A door opens to its own number.',
   },
   '0': { name: 'zero', line: 'Nothing. Hold it close.' },
   '±': {
@@ -430,10 +434,15 @@ export const GLYPHS: Record<string, GlyphInfo> = {
     line: 'Growth, upon growth.',
     hint: '^ (or K), then a digit  —  raise x to that power:  2 ^ 5  makes  32',
   },
-  '√2': {
-    name: 'the diagonal',
-    line: 'One across, one up. Between them lies √2.',
-    hint: 'Tab while holding a direction  —  dash that way: up, and on the diagonal',
+  y: {
+    name: 'the other axis',
+    line: 'There was always another direction.',
+    hint: 'Tab while holding a direction  —  dash that way: up along y, and on the diagonal',
+  },
+  '√': {
+    name: 'root',
+    line: 'What was grown can be undone.',
+    hint: '√ (or R), then a digit  —  that root of x:   81, √, 2  makes 9      27, √, 3  makes 3\nSome roots never end. Those cannot be held.',
   },
   'π': {
     name: 'pi',

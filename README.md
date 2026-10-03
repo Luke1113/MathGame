@@ -27,11 +27,12 @@ npm run check:rooms    # validate the chapter maps
 |---|---|---|
 | move / aim | `A` `D` / `W` `S` | |
 | jump · drop through | `Space` · `S`+`Space` | |
-| dash (with √2: hold a direction, including up) | `Tab` | |
+| dash (with y: hold a direction, including up) | `Tab` | |
 | strike | `J` | `Num 0` |
 | hold a digit | `1`–`9` | `1`–`9` |
 | `+` `−` `×` `÷`, then a digit | type `+` `-` `*` `/` (Shift as needed), or `U` `I` `O` `P` | `+` `−` `*` `/` |
 | `^`, then a digit | type `^`, or `K` | |
+| `√`, then a digit (2 = square root) | `R` | |
 | the opposite of x | `-` then `-` | `−` then `−` |
 | equate | `Enter` or `=` | `Enter` |
 | slow time | `L` | `Num .` |
@@ -41,9 +42,11 @@ npm run check:rooms    # validate the chapter maps
 
 - **You hold a number, x.** Striking with it takes x away from an enemy's number.
 - **You cannot take more than there is.** If x is larger than the enemy, the strike is turned aside. Lower x first.
-- **A digit alone sets x to that digit. An operator followed by a digit changes x**, so `4`, `×`, `6` makes x = 24. Choosing a number slows time while you think. The slowdown draws on a small meter.
+- **A digit alone sets x to that digit. An operator followed by a digit changes x**, so `4`, `×`, `6` makes x = 24. Choosing a number slows time briefly.
+- **Digits fall from the undone.** Touch one and it joins x by the last sign you used (shown left of x).
+- **Exact kills fill the circle beside x**, faster when they come close together.
 - **The bound** (framed numbers) can't be lessened, only *shared*. Strike them with a number that divides them, and they break into that many equal pieces.
-- **Equate** (`Enter`) undoes every enemy on screen whose number equals x.
+- **Equate** (`Enter`) spends a full circle to undo the nearest enemy equal to x, and any equals close beside it.
 - **Doors** open to their own number: strike one while holding exactly that number, or equate beside it.
 - **Lamps** save your progress and restore you.
 
@@ -51,9 +54,12 @@ npm run check:rooms    # validate the chapter maps
 
 - **Past zero, numbers turn.** Taking more than there is carries an enemy through zero and it becomes negative. A negative enemy grows when struck with a positive x; hold a negative x to undo it.
 - **Fractions are exact.** `3 ÷ 4` makes x = 3/4, and a 3/4 enemy falls to it in one strike.
+- **Wholes** (circled numbers) can't be lessened, only broken: strike one with a whole number k and it shatters into k equal pieces. Pieces left alone drift back together and add up, until the whole is whole again.
+- **A slice** is a circle of wedges, 1/6 each, that break away one at a time.
+- **Roots:** `81`, `√`, `2` makes 9. A root that never ends (√2) cannot be held.
 - **Powers:** `2 ^ 6` makes 64, the same number as the enemy written `4³`.
+- **y, the other axis:** the dash follows the held direction, up and diagonally.
 - **The plane:** a door names coordinates; stand on those points.
-- **The unknown:** an equation door opens to its solution.
 
 ## Code map
 

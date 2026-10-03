@@ -11,7 +11,10 @@ export interface BossHost {
   sfx: Sound;
   floorY: number;
   arenaW: number;
-  shoot(x: number, y: number, vx: number, vy: number): void;
+  /** Fire a shot; a digit shot carries its digit, and x can strike it back. */
+  shoot(x: number, y: number, vx: number, vy: number, digit?: number): void;
+  /** Fill x's equate meter. */
+  reward(amount: number): void;
   shake(a: number): void;
   flash(a: number): void;
   hitstop(t: number): void;
@@ -34,13 +37,19 @@ export interface Boss {
   update(dt: number): void;
   draw(ctx: CanvasRenderingContext2D): void;
   lights(add: (x: number, y: number, r: number, a: number) => void): void;
-  touches(box: Rect): boolean;
-  /** A strike lands with x = v. Returns text to float when it is refused. */
-  struck(v: Q): string | null;
+  /**
+   * A strike box with x = v. Returns undefined when nothing was touched,
+   * null when it bit, or text to float when it was refused.
+   */
+  hit(box: Rect, v: Q): string | null | undefined;
   /** Equate pressed: true if this ends the fight. */
   tryResolve(): boolean;
   /** Would equating with x = v strike this boss? */
   matches(v: Q): boolean;
+  /** Equate lands with x = v (the meter is already paid). */
+  equate(v: Q): void;
+  /** A shot x struck back; true if the boss caught it. */
+  catchShot(x: number, y: number, r: number): boolean;
 }
 
 type State =
@@ -356,6 +365,18 @@ export class Zero implements Boss {
     if (this.state === 'full' && rectCircle({ x: p.x, y: p.y, w: p.w, h: p.h }, this.x, this.y, this.r * 0.8)) {
       p.vx = Math.sign(p.cx - this.x || 1) * 160;
     }
+  }
+
+  hit(box: Rect, v: Q): string | null | undefined {
+    return this.touches(box) ? this.struck(v) : undefined;
+  }
+
+  equate(v: Q): void {
+    this.struck(v);
+  }
+
+  catchShot(): boolean {
+    return false;
   }
 
   /** Can a strike box touch the ring? */

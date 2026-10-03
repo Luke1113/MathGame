@@ -28,6 +28,8 @@ export function loadSave(): SaveData | null {
     // saves from the first prototype recorded only Zero
     if (d.bossDone && !save.bosses.includes('zero')) save.bosses.push('zero');
     delete (save as { bossDone?: boolean }).bossDone;
+    // the upward dash was once called √2; it is now the axis y
+    save.has = save.has.map((g) => (g === '√2' ? 'y' : g));
     return save;
   } catch {
     return null;

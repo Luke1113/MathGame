@@ -89,6 +89,22 @@ export class Q {
     for (let i = 0; i < k; i++) r = r.mul(this);
     return r;
   }
+  /** The k-th root, when it is exact; null when it would never end (or is not real). */
+  root(k: number): Q | null {
+    if (k < 1 || this.p !== 0) return null;
+    if (k === 1) return this;
+    if (this.n < 0 && k % 2 === 0) return null;
+    const exact = (x: number): number | null => {
+      const g = Math.round(Math.pow(x, 1 / k));
+      for (const c of [g - 1, g, g + 1]) if (c >= 0 && Math.pow(c, k) === x) return c;
+      return null;
+    };
+    const a = exact(Math.abs(this.n));
+    const b = exact(this.d);
+    if (a === null || b === null) return null;
+    return Q.of(Math.sign(this.n) * a, b);
+  }
+
   /** Does an integer > 1 divide this whole number evenly? */
   divisibleBy(k: number): boolean {
     return this.isInt && k > 1 && this.n > 0 && this.n % k === 0;

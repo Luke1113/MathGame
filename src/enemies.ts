@@ -4,7 +4,7 @@ import { Q } from './num';
 import { groundAt, moveBody, type Body } from './physics';
 import type { Room } from './room';
 
-export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'orbiter' | 'bound' | 'gate' | 'door';
+export type EnemyKind = 'walker' | 'drifter' | 'emitter' | 'orbiter' | 'bound' | 'gate' | 'door' | 'whole' | 'piece' | 'wedge';
 
 export interface World {
   room: Room;
@@ -22,6 +22,19 @@ export class Enemy implements Body {
   vy = 0;
   onGround = false;
   n: Q;
+  /** The number it began as. */
+  readonly start: Q;
+  /** Pieces broken from the same whole share a group, and drift back together. */
+  group = 0;
+  /** The whole a piece was broken from. */
+  whole: Q | null = null;
+  age = 0;
+  /** Where a piece is drawn to, while it seeks the rest of its whole. */
+  mergeTo: { x: number; y: number } | null = null;
+  /** Wedges of a slice: attached to the circle until they break away. */
+  attached = true;
+  detachT = 0;
+  wedgeCount = 1;
   /** How the number first shows itself, e.g. "2^5". Lost at the first wound. */
   label: string | null = null;
   /** For doors: what is written on them, e.g. "2x + 5 = 1". */
@@ -51,6 +64,7 @@ export class Enemy implements Body {
     readonly key: string,
   ) {
     this.n = n;
+    this.start = n;
     this.resize();
   }
 
@@ -86,8 +100,12 @@ export class Enemy implements Body {
     if (this.kind === 'walker') {
       this.w = 12 + 10 * d;
       this.h = frac ? 34 : 26;
-    } else if (this.kind === 'drifter' || this.kind === 'orbiter') {
+    } else if (this.kind === 'drifter' || this.kind === 'orbiter' || this.kind === 'piece') {
       this.w = this.h = 24 + 8 * d;
+    } else if (this.kind === 'whole') {
+      this.w = this.h = 46 + 8 * d;
+    } else if (this.kind === 'wedge') {
+      this.w = this.h = 34;
     } else if (this.kind === 'emitter') {
       this.w = this.h = 30 + 6 * d;
     } else if (this.kind === 'bound') {
@@ -98,16 +116,20 @@ export class Enemy implements Body {
     if (this.kind === 'walker' || this.kind === 'bound') this.y = bottom - this.h;
   }
 
+  private get floats(): boolean {
+    return ['drifter', 'emitter', 'orbiter', 'whole', 'piece', 'wedge'].includes(this.kind);
+  }
+
   hitbox(): Rect {
-    const inset = this.kind === 'drifter' || this.kind === 'emitter' || this.kind === 'orbiter' ? 4 : 2;
+    const inset = this.floats ? 4 : 2;
     return { x: this.x + inset, y: this.y + inset, w: this.w - inset * 2, h: this.h - inset * 2 };
   }
 
   /** Knocked back by a blow; negative numbers are pulled toward it instead. */
   knock(fromX: number, power: number): void {
-    if (this.solid || this.kind === 'emitter' || this.kind === 'orbiter') return;
+    if (this.solid || this.kind === 'emitter' || this.kind === 'orbiter' || (this.kind === 'wedge' && this.attached)) return;
     const s = (Math.sign(this.cx - fromX) || 1) * (this.negative ? -0.6 : 1);
-    if (this.kind === 'drifter') {
+    if (this.floats) {
       this.vx = s * power * 1.3;
       this.vy = -power * 0.3;
     } else {
@@ -119,6 +141,7 @@ export class Enemy implements Body {
 
   update(dt: number, w: World): void {
     this.t += dt;
+    this.age += dt;
     this.hurtT = Math.max(0, this.hurtT - dt);
     this.popT = Math.max(0, this.popT - dt * 4);
     this.turnT = Math.max(0, this.turnT - dt * 2);
@@ -154,34 +177,30 @@ export class Enemy implements Body {
         moveBody(this, w.room, dt);
         break;
       }
-      case 'drifter': {
-        const near = Math.hypot(dx, dy) < 300;
-        let ax = 0;
-        let ay = 0;
-        if (near) {
-          const d = Math.hypot(dx, dy) || 1;
-          ax = (dx / d) * 140 * haste;
-          ay = (dy / d) * 140 * haste;
-        } else {
-          ax = (this.homeX - this.cx) * 1.2;
-          ay = (this.homeY - this.cy) * 1.2;
+      case 'wedge':
+        if (this.attached) {
+          // one slice of a turning circle, until its moment comes
+          this.orbitA += dt * 0.9;
+          const R = 46;
+          this.x = this.homeX + Math.cos(this.orbitA) * R * 0.62 - this.w / 2;
+          this.y = this.homeY + Math.sin(this.orbitA) * R * 0.62 - this.h / 2;
+          if (Math.hypot(dx, dy) < 460) this.detachT -= dt;
+          if (this.detachT <= 0) {
+            this.attached = false;
+            const d = Math.hypot(dx, dy) || 1;
+            this.vx = (dx / d) * 300;
+            this.vy = (dy / d) * 300;
+            this.stunT = 0.5;
+          }
+          break;
         }
-        ay += Math.sin(this.t * 2.1) * 60;
-        this.vx += ax * dt;
-        this.vy += ay * dt;
-        const drag = Math.exp(-1.6 * dt);
-        this.vx *= drag;
-        this.vy *= drag;
-        const sp = Math.hypot(this.vx, this.vy);
-        const max = this.stunT > 0 ? 400 : 90 * haste;
-        if (sp > max) {
-          this.vx *= max / sp;
-          this.vy *= max / sp;
-        }
-        this.x = clamp(this.x + this.vx * dt, 0, w.room.pw - this.w);
-        this.y = clamp(this.y + this.vy * dt, 0, w.room.ph - this.h);
+        this.drift(dt, w, dx, dy, haste);
         break;
-      }
+      case 'drifter':
+      case 'whole':
+      case 'piece':
+        this.drift(dt, w, dx, dy, haste);
+        break;
       case 'orbiter': {
         // goes around its centre forever, at radius 2 tiles
         this.orbitA += dt * 1.1 * (this.negative ? -1 : 1);
@@ -209,6 +228,42 @@ export class Enemy implements Body {
         break;
     }
     if (this.y > w.room.ph + 40 || this.x < -60 || this.x > w.room.pw + 60) this.dead = true;
+  }
+
+  /** Floating movement: toward x when near, home otherwise, or toward the rest of its whole. */
+  private drift(dt: number, w: World, dx: number, dy: number, haste: number): void {
+    const near = Math.hypot(dx, dy) < 300;
+    let ax = 0;
+    let ay = 0;
+    if (this.mergeTo) {
+      // a piece seeks the rest of its whole
+      const mx = this.mergeTo.x - this.cx;
+      const my = this.mergeTo.y - this.cy;
+      const d = Math.hypot(mx, my) || 1;
+      ax = (mx / d) * 260;
+      ay = (my / d) * 260;
+    } else if (near) {
+      const d = Math.hypot(dx, dy) || 1;
+      ax = (dx / d) * 140 * haste;
+      ay = (dy / d) * 140 * haste;
+    } else {
+      ax = (this.homeX - this.cx) * 1.2;
+      ay = (this.homeY - this.cy) * 1.2;
+    }
+    ay += Math.sin(this.t * 2.1) * 60;
+    this.vx += ax * dt;
+    this.vy += ay * dt;
+    const drag = Math.exp(-1.6 * dt);
+    this.vx *= drag;
+    this.vy *= drag;
+    const sp = Math.hypot(this.vx, this.vy);
+    const max = this.stunT > 0 ? 400 : (this.kind === 'whole' ? 45 : this.mergeTo ? 120 : 90) * haste;
+    if (sp > max) {
+      this.vx *= max / sp;
+      this.vy *= max / sp;
+    }
+    this.x = clamp(this.x + this.vx * dt, 0, w.room.pw - this.w);
+    this.y = clamp(this.y + this.vy * dt, 0, w.room.ph - this.h);
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -256,7 +311,7 @@ export class Enemy implements Body {
       return;
     }
 
-    let size = this.kind === 'emitter' ? 26 : this.kind === 'drifter' || this.kind === 'orbiter' ? 30 : 32;
+    let size = this.kind === 'emitter' || this.kind === 'wedge' ? 22 : this.kind === 'whole' ? 36 : this.kind === 'drifter' || this.kind === 'orbiter' || this.kind === 'piece' ? 28 : 32;
     size += this.popT * 12;
     const by = this.kind === 'walker' || this.kind === 'bound' ? this.y + this.h - (this.n.d !== 1 && !this.label ? 17 : 13) : cy;
     const glyph = (x: number, y: number) => {
@@ -264,6 +319,46 @@ export class Enemy implements Body {
       else drawQ(ctx, this.n, x, y, size, 600);
     };
 
+    if (this.kind === 'whole') {
+      // a whole circle, waiting to be broken
+      const r = this.w / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = a * 0.25;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r - 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = a;
+    }
+    if (this.kind === 'piece') {
+      // a piece is an arc: how much of the whole it is
+      const part = this.whole ? clamp(Math.abs(this.n.approx / this.whole.approx), 0.04, 1) : 0.5;
+      const r = this.w / 2;
+      const turn = this.t * 0.8;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, turn, turn + Math.PI * 2 * part);
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+    }
+    if (this.kind === 'wedge') {
+      const n = this.wedgeCount;
+      const half = Math.PI / n;
+      ctx.beginPath();
+      if (this.attached) {
+        ctx.moveTo(this.homeX, this.homeY);
+        ctx.arc(this.homeX, this.homeY, 46, this.orbitA - half, this.orbitA + half);
+      } else {
+        const dir = Math.atan2(this.vy, this.vx) + Math.PI;
+        const tipX = cx + Math.cos(dir) * 16;
+        const tipY = cy + Math.sin(dir) * 16;
+        ctx.moveTo(tipX, tipY);
+        ctx.arc(tipX, tipY, 34, dir + Math.PI - half, dir + Math.PI + half);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
     if (this.kind === 'orbiter') {
       ctx.globalAlpha = a * 0.12;
       ctx.beginPath();
@@ -271,7 +366,7 @@ export class Enemy implements Body {
       ctx.stroke();
       ctx.globalAlpha = a;
     }
-    if (this.kind === 'drifter' || this.kind === 'orbiter') {
+    if (this.kind === 'drifter' || this.kind === 'orbiter' || this.kind === 'piece') {
       ctx.globalAlpha = a * 0.15;
       glyph(cx - this.vx * 0.12, cy - this.vy * 0.12);
       ctx.globalAlpha = a;
@@ -362,6 +457,10 @@ export interface Shot {
   r: number;
   life: number;
   dead: boolean;
+  /** A digit π has spoken; x can strike it back. */
+  digit?: number;
+  /** Struck back by x: it no longer harms x. */
+  friendly?: boolean;
 }
 
 export function makeEnemy(kind: EnemyKind, n: Q, key: string, tx: number, ty: number, label: string | null = null): Enemy {
@@ -370,7 +469,7 @@ export function makeEnemy(kind: EnemyKind, n: Q, key: string, tx: number, ty: nu
   e.resize();
   const footX = tx * TILE + TILE / 2;
   const footY = (ty + 1) * TILE;
-  if (kind === 'drifter' || kind === 'emitter' || kind === 'orbiter') {
+  if (kind !== 'walker' && kind !== 'bound') {
     e.x = footX - e.w / 2;
     e.y = ty * TILE + TILE / 2 - e.h / 2;
   } else {

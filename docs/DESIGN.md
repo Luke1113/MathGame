@@ -42,9 +42,13 @@ The player holds one number, x, and it is the weapon. It's shown in hand and in 
 - Illegal operations are refused and named: `3 − 5 < 1`, `4 ∤ 7`, `÷ 0 is undefined`.
 - Digits and operators are **learned in the world** as Metroidvania pickups. Exploring makes composing easier.
 
-### Equate (`=`)
+### Equate (`=`) and its meter
 
-Undoes every enemy on screen whose number equals x, as a frozen-time chain of lines and bells. It also opens **equation doors** (`= 24`) and finishes the boss.
+Exact kills fill a circle beside x (more for kills in quick succession). A full circle pays for one equate: it undoes the nearest enemy equal to x, and chains to any equals standing close beside it. Doors are free to equate, and so is a boss's final identity.
+
+### Fallen digits
+
+A whole number undone may drop one of its digits. Touching it joins it to x by the last sign used, so x keeps changing in the middle of a fight without stopping to type.
 
 ### The bound (division)
 
@@ -66,18 +70,20 @@ Counting, + − × ÷, natural numbers, divisibility, equality.
 
 ### Chapter II — The Other Side *(middle school)* — **playable**
 
-Negative numbers, fractions, powers, Pythagoras, the coordinate plane, linear equations, π.
+Negative numbers, fractions, powers and roots, the coordinate plane, linear equations, π.
 
 Below zero, **the world is drawn in negative**: black ink on white. Negative numbers inside it are drawn as photographic negatives of themselves.
 
-- Rooms: *the other side → reflection (hub) → the broken → growth → the diagonal → the plane → the unknown → circumference → π*
-- **± — the opposite.** The floor under x is gone. A strike that takes more than there is carries the enemy *through* zero, and it turns negative (it is then pulled toward blows rather than pushed). Positive x makes a negative enemy *more* negative, so it must be undone with a negative x, because taking away less than nothing gives more. `−` pressed twice negates x.
-- **/ — a part.** Division no longer has to come out even: `3 ÷ 4` makes x = 3/4. Fraction enemies, and fractions drawn stacked as they are by hand. All arithmetic is exact (rational numbers).
-- **^ — power.** `2 ^ 6` makes 64. Enemies first show themselves in power form (`4³`, `2⁶`); equal forms fall to the same equate.
-- **√2 — the diagonal.** The dash follows the held direction, upward and diagonally, which opens a shaft in the hub that a jump alone can't reach.
-- **The plane.** A room with coordinate axes, ticks and labels. A door names two points; it opens when x has stood on both.
-- **The unknown.** Equation doors: `x + 9 = 4`, `3x + 1 = 3`, `2^x = 64`. Hold the solution (−5, 2/3, 6) and strike or equate. Before the boss, `7x = 22` asks for Archimedes' 22/7.
-- **Boss: π, "the number that never ends."** Its digits circle it. Its volleys follow π's digits in order (3 shots, then 1, then 4, 1, 5, 9…), and the next digit is shown before it fires. It rolls across the floor as a wheel, measuring the floor in circumferences, and sweeps the room with radii that only a dash passes through. When weak, it pretends to be a fraction: the old measurements of π (Babylon's 25/8, Egypt's 256/81, Archimedes' 22/7), each to be brought exactly to zero. After the third, its circle unrolls into a line π long, which x takes up: **x = π**, and equating ends it (π = π).
+- Rooms: *the other side → reflection (hub) → the broken → growth → the other axis → the plane → the unknown → circumference → π*
+- **± (the opposite).** A strike that takes more than there is carries the enemy *through* zero and it turns negative. Positive x makes a negative enemy *more* negative, so it must be undone with a negative x. `−` pressed twice negates x.
+- **/ (a part).** Division no longer has to come out even: `3 ÷ 4` makes 3/4. All arithmetic is exact.
+- **Wholes.** A circled number that can only be broken: strike it with a whole number k and it shatters into k pieces of 1/k of it. The choice of k is a real choice (2 pieces or 8). Pieces left alive drift together and add up (1/4 + 1/4 = 1/2), until the whole re-forms.
+- **Slices.** A circle of six wedges, 1/6 each, turning, breaking away to dive one by one.
+- **^ and √.** `2 ^ 6` makes 64; `81 √ 2` makes 9. Enemies first appear in power form (`4³`, `2⁶`). A root that never ends (√2) is refused: the first irrational, before π.
+- **y (the other axis).** The dash follows the held direction, upward and diagonally, opening a shaft in the hub. The upward dash adds to a jump rather than replacing it.
+- **The plane.** A room with coordinate axes. A door names two points; it opens when x has stood on both.
+- **One equation door** (`3x + 1 = 3`), and `7x = 22` before the boss.
+- **Boss: π, "the number that never ends."** It never stops moving. Its digits fly at x in order (3, 1, 4, 1, 5, 9…): a 9 is a slow heavy ring, a 1 a fast needle, a 0 a breath of silence. Strike a digit and it flies back, shattering whatever piece it meets or staggering π. Around π circle the pieces of an old measurement of the circle: 3 + 1/8 (Babylon), 3 + 1/7 (Archimedes), 3 + 1/10 + 1/25 (3.14). Break all the pieces, by exact strikes or struck-back digits, and it cracks. Each phase changes the arena: a figure of eight in the air; a wheel rolling round floor, wall, ceiling and wall; then a closing circle outside which there is nothing. At the end its circle unrolls into a line π long, which x takes up: **x = π**, and π = π.
 
 ### Chapter III — Functions *(high school)*
 

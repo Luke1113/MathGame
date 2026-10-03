@@ -1,4 +1,4 @@
-export type Op = '+' | '−' | '×' | '÷' | '^';
+export type Op = '+' | '−' | '×' | '÷' | '^' | '√';
 
 export type Ev =
   | { k: 'jump' }
@@ -42,6 +42,7 @@ const OP_CODES: Record<string, Op> = {
   NumpadDivide: '÷',
   KeyP: '÷',
   KeyK: '^',
+  KeyR: '√',
 };
 
 /** Operator symbols by the character typed, so Shift + = gives + and Shift + 8 gives ×, on any layout. */
@@ -54,6 +55,7 @@ const OP_CHARS: Record<string, Op> = {
   '/': '÷',
   '÷': '÷',
   '^': '^',
+  '√': '√',
 };
 
 function classify(e: KeyboardEvent): Ev {

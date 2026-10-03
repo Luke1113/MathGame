@@ -3,6 +3,7 @@ import { Zero, type Boss, type BossHost } from './boss';
 import { clamp, damp, overlaps, pal, rectCircle, serif, setPalette, TILE, VIEW_H, VIEW_W } from './constants';
 import { drawQ, drawRich, qWidth } from './draw';
 import { Enemy, makeEnemy, type Shot, type World } from './enemies';
+import { groundAt } from './physics';
 import { Dust, Fx } from './fx';
 import { Input, type Ev, type Op } from './input';
 import { Q } from './num';
@@ -51,6 +52,16 @@ interface Point {
   t: number;
 }
 
+/** A digit fallen from an enemy that was undone; touching it joins it to x. */
+interface Drop {
+  x: number;
+  y: number;
+  vy: number;
+  d: number;
+  t: number;
+  dead: boolean;
+}
+
 interface Seal {
   until: string;
   tiles: [number, number][];
@@ -58,7 +69,7 @@ interface Seal {
 
 const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 const OPS_ONE = ['+', '−', '×', '÷', '='];
-const OPS_TWO = ['±', '/', '^', '√2'];
+const OPS_TWO = ['±', '/', '^', '√', 'y'];
 const CHAPTER_ONE_GLYPHS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '+', '−', '×', '÷', '='];
 const FLOOR_Y = 14 * TILE;
 
@@ -122,6 +133,9 @@ export class Game {
   private lamps: Lamp[] = [];
   private motes: Mote[] = [];
   private points: Point[] = [];
+  private drops: Drop[] = [];
+  /** Pieces broken from one whole share a group number. */
+  private groupSeq = 0;
   private seals: Seal[] = [];
   private boss: Boss | null = null;
   private bossId = '';
@@ -136,7 +150,14 @@ export class Game {
   private fadeA = 0;
   private freeze = 0;
   private timeScale = 1;
+  /** Δt: how long time can be held still. */
   private meter = 1;
+  /** The equate meter: filled by exact kills, spent whole by one equate. */
+  private eq = 0;
+  private eqPop = 0;
+  private lastKill = -99;
+  /** The last sign used; fallen digits join x by it. */
+  private lastOp: Op = '+';
   private compose: { op: Op; t: number } | null = null;
   private lastExpr: { s: string; t: number } | null = null;
   private equateSeq: { targets: Enemy[]; boss: boolean; t: number; i: number } | null = null;
@@ -203,6 +224,7 @@ export class Game {
     this.texts = [];
     this.motes = [];
     this.points = [];
+    this.drops = [];
     this.seals = [];
     this.boss = null;
     this.bossId = '';
@@ -249,6 +271,24 @@ export class Game {
           this.enemies.push(e);
           break;
         }
+        case 'whole': {
+          const e = makeEnemy('whole', Q.int(s.n), pl.key, pl.tx, pl.ty);
+          e.appear = 1;
+          this.enemies.push(e);
+          break;
+        }
+        case 'slice':
+          for (let i = 0; i < s.parts; i++) {
+            const e = makeEnemy('wedge', Q.of(1, s.parts), `${pl.key}/${i}`, pl.tx, pl.ty);
+            e.homeX = fx;
+            e.homeY = pl.ty * TILE + TILE / 2;
+            e.orbitA = (i / s.parts) * Math.PI * 2;
+            e.wedgeCount = s.parts;
+            e.detachT = 1.5 + i * 2.2;
+            e.appear = 1;
+            this.enemies.push(e);
+          }
+          break;
         case 'point':
           if (axes) this.points.push({ a: s.a, b: s.b, x: (axes.ox + s.a) * TILE, y: (axes.oy - s.b) * TILE, lit: false, t: 0 });
           break;
@@ -395,6 +435,7 @@ export class Game {
     p.vx = p.vy = 0;
     p.strikeT = -1;
     p.value = this.has('1') ? Q.ONE : null;
+    this.eq = 0;
   }
 
   private respawn(): void {
@@ -446,7 +487,8 @@ export class Game {
       get piOffered() {
         return g.shrines.some((s) => s.give === 'π');
       },
-      shoot: (x, y, vx, vy) => g.shots.push({ x, y, vx, vy, r: 4, life: 5, dead: false }),
+      shoot: (x, y, vx, vy, digit) => g.shots.push({ x, y, vx, vy, r: digit ? 6 + digit * 0.9 : 4, life: 5, dead: false, digit }),
+      reward: (a) => g.reward(a),
       shake: (a) => g.shake(a),
       flash: (a) => g.flash(a),
       hitstop: (t) => g.hitstop(t),
@@ -460,6 +502,7 @@ export class Game {
         g.fx.text(g.player.cx, g.player.y - 22, '× 0', { size: 18 });
       },
       onCrack: (x, y) => {
+        g.reward(0.3);
         g.motes.push({ x: x - 30, y, t: 0, dead: false }, { x: x + 30, y, t: 0, dead: false });
       },
       onIntro: () => {
@@ -539,26 +582,12 @@ export class Game {
     return this.has('0') ? 0 : 1;
   }
 
-  private onDigit(d: number): void {
-    const ds = String(d);
-    const p = this.player;
-    if (!this.has(ds) || p.value === null) {
-      this.sfx.refuse();
-      this.float('?');
-      this.compose = null;
-      return;
-    }
-    const c = this.compose;
-    this.compose = null;
+  /** x op d, or the reason it cannot be. */
+  private apply(op: Op, v: Q, d: number): { r: Q | null; why: string } {
     const q = Q.int(d);
-    if (!c) {
-      this.setValue(q);
-      return;
-    }
-    const v = p.value;
     let r: Q | null = null;
     let why = '';
-    switch (c.op) {
+    switch (op) {
       case '+':
         r = v.add(q);
         if (!r) why = 'π will not mix';
@@ -584,17 +613,47 @@ export class Game {
       case '^':
         r = v.pow(d);
         break;
+      case '√': {
+        if (d === 0) {
+          why = 'a 0th root is undefined';
+          break;
+        }
+        r = v.root(d);
+        const name = d === 2 ? `√${v}` : `${d}√${v}`;
+        if (!r) why = v.sign < 0 && d % 2 === 0 ? `${name} is not real` : `${name} never ends`;
+        break;
+      }
     }
     if (r && r.unwieldy) {
       why = 'too large to hold';
       r = null;
     }
+    return { r, why };
+  }
+
+  private onDigit(d: number): void {
+    const ds = String(d);
+    const p = this.player;
+    if (!this.has(ds) || p.value === null) {
+      this.sfx.refuse();
+      this.float('?');
+      this.compose = null;
+      return;
+    }
+    const c = this.compose;
+    this.compose = null;
+    if (!c) {
+      this.setValue(Q.int(d));
+      return;
+    }
+    const v = p.value;
+    const { r, why } = this.apply(c.op, v, d);
     if (!r) {
       this.sfx.refuse();
       this.float(why);
       return;
     }
-    this.setValue(r, `${v} ${c.op} ${d}`);
+    this.setValue(r, c.op === '√' ? `${d === 2 ? '' : d}√${v}` : `${v} ${c.op} ${d}`);
   }
 
   private onOp(op: Op): void {
@@ -612,6 +671,7 @@ export class Game {
       return;
     }
     this.compose = { op, t: 0 };
+    this.lastOp = op;
     this.sfx.compose();
   }
 
@@ -638,14 +698,36 @@ export class Game {
         return;
       }
     }
+    if (this.eq < 1) {
+      this.sfx.refuse();
+      this.float('= is not ready', p.cx, p.y - 24, 16);
+      return;
+    }
     const view = { x: this.cam.x, y: this.cam.y, w: VIEW_W, h: VIEW_H };
-    const targets = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()));
+    const equal = this.enemies.filter((e) => !e.dead && e.kind !== 'door' && e.n.eq(v) && e.appear >= 1 && overlaps(view, e.hitbox()));
     const bossHit = !!this.boss && this.boss.matches(v);
+    // the nearest equal, and whatever equals stand close beside it
+    const targets: Enemy[] = [];
+    if (equal.length && !bossHit) {
+      equal.sort((a, b) => Math.hypot(a.cx - p.cx, a.cy - p.cy) - Math.hypot(b.cx - p.cx, b.cy - p.cy));
+      targets.push(equal[0]);
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const e of equal) {
+          if (targets.includes(e)) continue;
+          if (targets.some((t) => Math.hypot(t.cx - e.cx, t.cy - e.cy) < 170)) {
+            targets.push(e);
+            grew = true;
+          }
+        }
+      }
+    }
     if (!targets.length && !bossHit) {
       this.sfx.refuse();
       this.float('≠', p.cx, p.y - 24, 22);
       return;
     }
+    this.eq = 0;
     this.equateSeq = { targets, boss: bossHit, t: 0, i: 0 };
     this.equateCd = 1.2;
     this.compose = null;
@@ -662,19 +744,37 @@ export class Game {
         if (e.kind === 'gate') this.openGate(e);
         else this.kill(e, true);
       } else if (this.boss && this.player.value) {
-        this.boss.struck(this.player.value);
+        this.boss.equate(this.player.value);
       }
       this.shake(4);
       s.i++;
     }
-    if (s.t > 0.5 + total * 0.16) {
-      this.equateSeq = null;
-      this.meter = Math.min(1, this.meter + 0.3);
+    if (s.t > 0.5 + total * 0.16) this.equateSeq = null;
+  }
+
+  /** Fill the equate meter; kills close together fill it faster. */
+  private reward(a: number): void {
+    const chain = this.time - this.lastKill < 2.5 ? 0.1 : 0;
+    this.lastKill = this.time;
+    const before = this.eq;
+    this.eq = Math.min(1, this.eq + a + chain);
+    if (before < 1 && this.eq >= 1) {
+      this.eqPop = 1;
+      this.sfx.tone(660, 1.2, { vol: 0.08, wet: 0.7 });
     }
   }
 
   private kill(e: Enemy, quiet = false): void {
     e.dead = true;
+    if (!quiet) {
+      this.reward(0.25);
+      // a whole number undone may let fall one of its digits
+      const start = e.start;
+      if (this.has('+') && start.isInt && !start.isZero && e.kind !== 'gate' && Math.random() < 0.45) {
+        const ds = [...String(Math.abs(start.n))].filter((c) => c !== '0' && this.has(c));
+        if (ds.length) this.drops.push({ x: e.cx, y: e.cy, vy: -160, d: Number(ds[Math.floor(Math.random() * ds.length)]), t: 0, dead: false });
+      }
+    }
     this.fx.dissolve(e.cx, e.cy, e.w, e.h, 20 + e.w);
     this.fx.burst(e.cx, e.cy, 10, { speed: 220, life: 0.4, line: true });
     if (!quiet) this.sfx.kill(Math.abs(this.player.value?.approx ?? 1));
@@ -729,6 +829,89 @@ export class Game {
     this.flash(0.2);
   }
 
+  /** A whole struck with a whole number k breaks into k equal pieces. */
+  private breakWhole(e: Enemy, k: number): void {
+    const each = e.n.div(Q.int(k))!;
+    const group = ++this.groupSeq;
+    e.dead = true;
+    this.float(`${e.n} = ${k} × ${each}`, e.cx, e.y - 18, 18);
+    this.fx.burst(e.cx, e.cy, 24, { speed: 260, life: 0.6, line: true });
+    for (let i = 0; i < k; i++) {
+      const c = new Enemy('piece', each, `${e.key}/${group}/${i}`);
+      const a = (i / k) * Math.PI * 2;
+      c.x = e.cx + Math.cos(a) * 10 - c.w / 2;
+      c.y = e.cy + Math.sin(a) * 10 - c.h / 2;
+      c.vx = Math.cos(a) * 320;
+      c.vy = Math.sin(a) * 320;
+      c.homeX = e.cx;
+      c.homeY = e.cy;
+      c.group = group;
+      c.whole = e.n;
+      c.stunT = 0.5;
+      c.appear = 0.4;
+      this.enemies.push(c);
+    }
+    this.reward(0.1);
+    this.sfx.kill(k);
+    this.hitstop(0.12);
+    this.shake(6);
+  }
+
+  /** Pieces left alone drift back together, and add up. */
+  private mergePieces(): void {
+    const groups = new Map<number, Enemy[]>();
+    for (const e of this.enemies) {
+      if (e.kind !== 'piece' || e.dead) continue;
+      const g = groups.get(e.group) ?? [];
+      g.push(e);
+      groups.set(e.group, g);
+    }
+    for (const pieces of groups.values()) {
+      for (const e of pieces) {
+        const others = pieces.filter((o) => o !== e);
+        if (e.age < 3.5 || !others.length) {
+          e.mergeTo = null;
+          continue;
+        }
+        const o = others.reduce((a, b) => (Math.hypot(a.cx - e.cx, a.cy - e.cy) < Math.hypot(b.cx - e.cx, b.cy - e.cy) ? a : b));
+        e.mergeTo = { x: o.cx, y: o.cy };
+      }
+      for (let i = 0; i < pieces.length; i++) {
+        for (let j = i + 1; j < pieces.length; j++) {
+          const a = pieces[i];
+          const b = pieces[j];
+          if (a.dead || b.dead || a.age < 3.5 || b.age < 3.5) continue;
+          if (Math.hypot(a.cx - b.cx, a.cy - b.cy) > 22) continue;
+          const sum = a.n.add(b.n);
+          if (!sum) continue;
+          this.fx.text((a.cx + b.cx) / 2, a.y - 16, `${a.n} + ${b.n} = ${sum}`, { size: 15, alpha: 0.65, life: 1.4 });
+          this.sfx.tone(392, 0.4, { vol: 0.07, wet: 0.5 });
+          b.dead = true;
+          if (sum.isZero) {
+            a.dead = true;
+            this.fx.dissolve(a.cx, a.cy, a.w, a.h, 20);
+          } else if (a.whole && sum.eq(a.whole)) {
+            // whole again
+            a.dead = true;
+            const w = new Enemy('whole', sum, `${a.key}/whole`);
+            w.x = a.cx - w.w / 2;
+            w.y = a.cy - w.h / 2;
+            w.homeX = a.cx;
+            w.homeY = a.cy;
+            w.appear = 0.3;
+            this.enemies.push(w);
+            this.fx.converge(a.cx, a.cy, 20, 60, 0.5);
+          } else {
+            a.n = sum;
+            a.age = 0;
+            a.popT = 1;
+            a.resize();
+          }
+        }
+      }
+    }
+  }
+
   private strike(e: Enemy): void {
     const p = this.player;
     const v = p.value ?? Q.ZERO;
@@ -745,6 +928,12 @@ export class Game {
       if (e.needsPoints) return blocked('stand where it says');
       if (v.eq(e.n)) return this.openDoor(e);
       return blocked(e.sign ? '≠' : `${v} ≠ ${e.n}`);
+    }
+    if (e.kind === 'whole') {
+      if (!this.has('/')) return blocked('· · ·');
+      const k = v.isInt ? v.n : 0;
+      if (k >= 2 && k <= 12) return this.breakWhole(e, k);
+      return blocked(k === 1 ? `${e.n} ÷ 1 = ${e.n}` : 'only a whole number breaks a whole');
     }
     if (e.armored) {
       if (!this.has('÷')) return blocked('· · ·');
@@ -853,7 +1042,7 @@ export class Game {
 
   private updatePlay(realDt: number, events: Ev[]): void {
     const p = this.player;
-    p.canDiag = this.has('√2');
+    p.canDiag = this.has('y');
     for (const e of events) {
       switch (e.k) {
         case 'pause':
@@ -885,13 +1074,14 @@ export class Game {
     // time: composing a number slows the world
     if (this.compose) {
       this.compose.t += realDt;
-      if (this.compose.t > 1.9) this.compose = null;
+      if (this.compose.t > 1.3) this.compose = null;
     }
     const wantSlow = !!this.compose || this.input.down('focus');
     const slow = wantSlow && this.meter > 0;
     if (slow) this.meter = Math.max(0, this.meter - realDt * 0.42);
     else this.meter = Math.min(1, this.meter + realDt * 0.09);
-    this.timeScale += ((slow ? 0.28 : 1) - this.timeScale) * damp(14, realDt);
+    this.timeScale += ((slow ? 0.45 : 1) - this.timeScale) * damp(14, realDt);
+    this.eqPop = Math.max(0, this.eqPop - realDt * 1.5);
     if (this.lastExpr) {
       this.lastExpr.t += realDt;
       if (this.lastExpr.t > 1.6) this.lastExpr = null;
@@ -939,6 +1129,11 @@ export class Game {
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.life -= dt;
+      if (s.friendly && this.boss?.catchShot(s.x, s.y, s.r)) {
+        s.dead = true;
+        this.fx.burst(s.x, s.y, 10, { speed: 160, life: 0.4, line: true });
+        continue;
+      }
       if (s.life <= 0 || this.room.solidAtPx(s.x, s.y)) {
         s.dead = true;
         this.fx.burst(s.x, s.y, 4, { speed: 80, life: 0.3 });
@@ -957,22 +1152,36 @@ export class Game {
         struck = true;
       }
       for (const s of this.shots) {
-        if (s.dead || !rectCircle(box, s.x, s.y, s.r + 5)) continue;
-        s.dead = true;
+        if (s.dead || s.friendly || !rectCircle(box, s.x, s.y, s.r + 5)) continue;
         struck = true;
-        this.fx.burst(s.x, s.y, 8, { speed: 160, life: 0.35, line: true });
-        this.sfx.hit(1);
+        this.sfx.hit(s.digit ?? 1);
         this.meter = Math.min(1, this.meter + 0.04);
+        if (s.digit !== undefined && this.boss) {
+          // a spoken digit, struck back at the one who spoke it
+          const dx = this.boss.x - s.x;
+          const dy = this.boss.y - s.y;
+          const d = Math.hypot(dx, dy) || 1;
+          s.vx = (dx / d) * 560;
+          s.vy = (dy / d) * 560;
+          s.friendly = true;
+          s.life = 3;
+          this.hitstop(0.05);
+        } else {
+          s.dead = true;
+          this.fx.burst(s.x, s.y, 8, { speed: 160, life: 0.35, line: true });
+        }
       }
       const boss = this.boss;
-      if (boss && p.value && !p.struck.has(boss) && boss.touches(box)) {
-        p.struck.add(boss);
-        const msg = boss.struck(p.value);
-        if (msg) {
-          this.float(msg, boss.x, boss.y - boss.r - 18, 18);
-          p.recoil(boss.x, 220);
+      if (boss && p.value && !p.struck.has(boss)) {
+        const msg = boss.hit(box, p.value);
+        if (msg !== undefined) {
+          p.struck.add(boss);
+          if (msg) {
+            this.float(msg, boss.x, boss.y - boss.r - 18, 18);
+            p.recoil(boss.x, 220);
+          }
+          struck = true;
         }
-        struck = true;
       }
       if (struck && p.strikeDir === 'down') p.bounce();
     }
@@ -987,15 +1196,37 @@ export class Game {
         }
       }
       for (const s of this.shots) {
-        if (!s.dead && rectCircle(body, s.x, s.y, s.r)) {
+        if (!s.dead && !s.friendly && rectCircle(body, s.x, s.y, s.r)) {
           s.dead = true;
           this.hurtPlayer(s.x);
           break;
         }
       }
     }
+    this.mergePieces();
     this.enemies = this.enemies.filter((e) => !e.dead);
     this.shots = this.shots.filter((s) => !s.dead);
+
+    // fallen digits: touch one and it joins x by the last sign used
+    for (const d of this.drops) {
+      d.t += dt;
+      if (!groundAt(this.room, d.x, d.y + 8)) {
+        d.vy = Math.min(600, d.vy + 1200 * dt);
+        d.y += d.vy * dt;
+      } else d.vy = 0;
+      if (d.t > 9) d.dead = true;
+      if (d.dead || d.t < 0.4 || !p.value) continue;
+      if (!rectCircle({ x: p.x, y: p.y, w: p.w, h: p.h }, d.x, d.y, 12)) continue;
+      d.dead = true;
+      const op = this.has(this.lastOp) ? this.lastOp : '+';
+      const { r, why } = this.apply(op, p.value, d.d);
+      if (r) this.setValue(r, op === '√' ? `${d.d === 2 ? '' : d.d}√${p.value}` : `${p.value} ${op} ${d.d}`);
+      else {
+        this.sfx.refuse();
+        this.float(why);
+      }
+    }
+    this.drops = this.drops.filter((d) => !d.dead);
 
     // motes of light heal
     for (const m of this.motes) {
@@ -1073,6 +1304,7 @@ export class Game {
     if (s.give !== 'π' && !this.save.taken.includes(s.key)) this.save.taken.push(s.key);
     writeSave(this.save);
     if (s.give === '1') this.player.value = Q.ONE;
+    if (s.give === '=') this.eq = 1;
     if (s.give === 'π') {
       this.player.value = Q.PI;
       this.player.valuePop = 1;
@@ -1299,7 +1531,25 @@ export class Game {
     this.boss?.draw(ctx);
 
     ctx.fillStyle = pal.ink;
+    ctx.strokeStyle = pal.ink;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     for (const s of this.shots) {
+      if (s.digit !== undefined) {
+        // a spoken digit in flight; struck back, it wears a ring
+        ctx.globalAlpha = 0.25;
+        ctx.font = serif(s.r * 3, { weight: 600 });
+        ctx.fillText(String(s.digit), s.x - s.vx * 0.03, s.y - s.vy * 0.03);
+        ctx.globalAlpha = 1;
+        ctx.fillText(String(s.digit), s.x, s.y);
+        if (s.friendly) {
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r * 1.6, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        continue;
+      }
       ctx.beginPath();
       ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
       ctx.fill();
@@ -1309,6 +1559,21 @@ export class Game {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
+
+    // fallen digits
+    for (const d of this.drops) {
+      const fade = d.t > 7 ? 1 - (d.t - 7) / 2 : 1;
+      const by = d.y + Math.sin(d.t * 3) * 2;
+      ctx.globalAlpha = 0.25 * fade;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(d.x, by, 11, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.9 * fade;
+      ctx.font = serif(18, { weight: 600 });
+      ctx.fillText(String(d.d), d.x, by + 1);
+    }
+    ctx.globalAlpha = 1;
 
     if (this.mode !== 'dead') this.player.draw(ctx, this.time);
 
@@ -1385,6 +1650,7 @@ export class Game {
     for (const e of this.enemies) add(e.cx, e.cy, e.solid ? 130 : 80, 0.55);
     for (const s of this.shots) add(s.x, s.y, 50, 0.6);
     for (const m of this.motes) add(m.x, m.y, 50, 0.6);
+    for (const d of this.drops) add(d.x, d.y, 60, 0.6);
     for (const pt of this.points) if (pt.lit) add(pt.x, pt.y, 120, 0.7);
     for (const t of this.texts) if (t.a > 0) add(t.x, t.y, 200, t.a * 0.6);
     this.boss?.lights(add);
@@ -1436,6 +1702,31 @@ export class Game {
       ctx.globalAlpha = 0.45 * (1 - this.lastExpr.t / 1.6);
       ctx.font = serif(18);
       ctx.fillText(this.lastExpr.s, cx, by - 34 - this.lastExpr.t * 8);
+    }
+    // the equate meter: a circle that closes around =
+    if (this.has('=')) {
+      const ex = cx + 150;
+      const full = this.eq >= 1;
+      ctx.globalAlpha = full ? 0.9 : 0.35;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(ex, by, 15, 0, Math.PI * 2);
+      ctx.globalAlpha = 0.15;
+      ctx.stroke();
+      ctx.globalAlpha = full ? 0.95 : 0.6;
+      ctx.lineWidth = full ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.arc(ex, by, 15 + this.eqPop * 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * this.eq);
+      ctx.stroke();
+      ctx.globalAlpha = full ? 0.6 + 0.35 * Math.sin(this.time * 4) : 0.3;
+      ctx.font = serif(22);
+      ctx.fillText('=', ex, by + 1);
+    }
+    // the sign that fallen digits join x by
+    if (this.has('+')) {
+      ctx.globalAlpha = 0.3;
+      ctx.font = serif(20);
+      ctx.fillText(this.lastOp, cx - 150, by);
     }
     // Δt: how long time can be held
     if (this.meter < 0.999 || this.timeScale < 0.95) {
@@ -1533,13 +1824,14 @@ export class Game {
       ['move', 'A  D'],
       ['aim', 'W  S   (S + Space falls through)'],
       ['jump', 'Space'],
-      ['dash', this.has('√2') ? 'Tab   (with a direction: up, diagonal)' : 'Tab'],
+      ['dash', this.has('y') ? 'Tab   (with a direction: up, diagonal)' : 'Tab'],
       ['strike', 'J   ·   Num 0'],
       ['hold a digit', '1 – 9'],
       ['+   −   ×   ÷', 'then a digit      type them, or U I O P'],
       ...(this.has('^') ? ([['^', 'then a digit      type it, or K']] as [string, string][]) : []),
+      ...(this.has('√') ? ([['√', 'then a digit      R  ·  √ 2 is the square root']] as [string, string][]) : []),
       ...(this.has('±') ? ([['the opposite', '−  then  −']] as [string, string][]) : []),
-      ['equate', 'Enter   ·   ='],
+      ['equate', 'Enter   ·   =      (when the circle is full)'],
       ['slow time', 'L   ·   Num .'],
       ['return', 'Esc'],
     ];

@@ -46,7 +46,7 @@ export class Player implements Body {
   private dashY = 0;
   /** Upward speed a jump already had when an upward dash began; it is given back after. */
   private dashCarry = 0;
-  /** After learning √2, dashes follow the held direction, upward and diagonally too. */
+  /** After learning y, dashes follow the held direction, upward and diagonally too. */
   canDiag = false;
   wantStrike = false;
   wantDash = false;
